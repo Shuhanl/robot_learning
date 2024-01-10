@@ -1,74 +1,66 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
+
+"""
+Network
+We are going to use two separated networks for actor and critic. 
+The actor network has three fully connected layers and three non-linearity functions, 
+ReLU for hidden layers and tanh for the output layer. On the other hand, 
+the critic network has three fully connected layers, but it used two activation 
+functions for hidden layers ReLU. Plus, its input sizes of critic network are sum 
+of state sizes and action sizes. One thing to note is that we initialize the final 
+layer's weights and biases so that they are *uniformly distributed. """
 
 class Actor(nn.Module):
-    def __init__(self, action_shape, robot_state_shape):
-      super().__init__()
-      self.vision_net = torch.nn.Sequential(
-          # CNN Layers
-          torch.nn.Conv2d(1, 32, kernel_size=8, stride=4),
-          torch.nn.ReLU(),
-          torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
-          torch.nn.ReLU(),
-          torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
-          torch.nn.ReLU(),
-          torch.nn.Flatten(),
-      )
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        init_w: float = 3e-3,
+    ):
+        """Initialize."""
+        super(Actor, self).__init__()
 
-      # Fully Connected Layers
-      # Assuming the flattened output from CNN is of size
-      # We concatenate it with the action tensor, so the input size becomes  + action_shape
-      self.fc_net = nn.Sequential(
-          nn.Linear(1024 + robot_state_shape, 256),
-          nn.ReLU(),
-          nn.Linear(256, action_shape)
-      )
+        self.hidden1 = nn.Linear(in_dim, 128)
+        self.hidden2 = nn.Linear(128, 128)
+        self.out = nn.Linear(128, out_dim)
 
-    def forward(self, vision, robot_state):
-        vision_out = self.vision_net(vision)
-        robot_state = robot_state.unsqueeze(0)
-        print(robot_state.size())
-        combined = torch.cat([vision_out, robot_state], dim=1)
-        action = self.fc_net(combined)
+        self.out.weight.data.uniform_(-init_w, init_w)
+        self.out.bias.data.uniform_(-init_w, init_w)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        """Forward method implementation."""
+        x = F.relu(self.hidden1(state))
+        x = F.relu(self.hidden2(x))
+        action = self.out(x).tanh()
+
         return action
 
+
 class Critic(nn.Module):
-    def __init__(self, action_shape, robot_state_shape):
+    def __init__(
+        self,
+        in_dim: int,
+        init_w: float = 3e-3,
+    ):
+        """Initialize."""
         super(Critic, self).__init__()
 
-        # CNN Layers for processing the observation
-        self.vision_net = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten()
-        )
+        self.hidden1 = nn.Linear(in_dim, 128)
+        self.hidden2 = nn.Linear(128, 128)
+        self.out = nn.Linear(128, 1)
 
-        # Fully Connected Layers
-        # Assuming the flattened output from CNN is of size
-        # We concatenate it with the action tensor, so the input size becomes  + action_shape
-        self.fc_net = nn.Sequential(
-            nn.Linear(1024 + action_shape+robot_state_shape, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)
-        )
+        self.out.weight.data.uniform_(-init_w, init_w)
+        self.out.bias.data.uniform_(-init_w, init_w)
 
-    def forward(self, vision, robot_state, act):
-      if not isinstance(vision, torch.Tensor):
-        vision = torch.tensor(vision, dtype=torch.float32)
-      if not isinstance(robot_state, torch.Tensor):
-        robot_state = torch.tensor(robot_state, dtype=torch.float32)
-      if not isinstance(act, torch.Tensor):
-        act = torch.tensor(act, dtype=torch.float32)
+    def forward(
+        self, state: torch.Tensor, action: torch.Tensor
+    ) -> torch.Tensor:
+        """Forward method implementation."""
+        x = torch.cat((state, action), dim=-1)
+        x = F.relu(self.hidden1(x))
+        x = F.relu(self.hidden2(x))
+        value = self.out(x)
 
-      obs_repr = self.vision_net(vision)
-
-      # Concatenate the CNN output with the action tensor along dimension 1 (columns)
-      combined = torch.cat([obs_repr, act, robot_state], dim=1)
-
-      q_value = self.fc_net(combined)
-
-      return q_value
+        return value
