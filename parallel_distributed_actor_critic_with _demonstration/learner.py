@@ -1,130 +1,321 @@
-import copy
 import torch
-from torch import nn
+import numpy as np
 import torch.optim as optim
-from torch.nn.utils import clip_grad_norm_
 from actor_critic_nn import Actor, Critic
-from replay_buffer import PrioritizedReplayBuffer
-from noise import OrnsteinUhlenbeckProcess
+from typing import List, Tuple
+import gym
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from IPython.display import clear_output
+from env import actionNormalizer, rewardFunc
+from trajectory_segmenter import TrajectorySegmenter
+from noise import OUNoise
 
-class Learner:
-    def __init__(self, action_shape, robot_state_shape, num_agent, gamma=0.95,lr=0.001,batch_size=1024,memory_size=int(1e6),tau=0.01,grad_norm_clipping = 0.5):
-        self.action_shape = action_shape
-        self.robot_state_shape = robot_state_shape
+
+class MutiAgent:
+    """MutiAgent interacting with environment.
+
+    Attribute:
+        actor (nn.Module): target actor model to select actions
+        actor_target (nn.Module): actor model to predict next actions
+        actor_optimizer (Optimizer): optimizer for training actor
+        critic (nn.Module): critic model to predict state values
+        critic_target (nn.Module): target critic model to predict state values
+        critic_optimizer (Optimizer): optimizer for training critic
+        demo (TrajectorySegmenter): demonstration data
+        n_segments (int): num of segments
+        gamma (float): discount factor
+        tau (float): parameter for soft target update
+        initial_random_steps (int): initial random action steps
+        lambda1 (float): weight for policy gradient loss
+        lambda2 (float): weight for behavior cloning loss
+        noise (OUNoise): noise generator for exploration
+        device (torch.device): cpu / gpu
+        transition (list): temporory storage for the recent transition
+        total_step (int): total step numbers
+        is_test (bool): flag to show the current mode (train / test)
+    """
+    def __init__(
+        self,
+        env_id,
+        memory_size: int,
+        n_agent: int,
+        batch_size: int,
+        demo_batch_size: int,
+        ou_noise_theta: float,
+        ou_noise_sigma: float,
+        demo: list,
+        gamma: float = 0.99,
+        tau: float = 5e-3,
+        initial_random_steps: int = 1e4,
+        # loss parameters
+        lambda1: float = 1e-3,
+        lambda2: int = 1.0
+    ):
+
+        env = gym.make(env_id)
+        self.global_env = actionNormalizer(env)
+
+        """Initialize."""
+        obs_dim = self.global_env.observation_space.shape[0]
+        action_dim = self.global_env.action_space.shape[0]
+
+        self.n_agent = n_agent
+        self.batch_size = batch_size
         self.gamma = gamma
-        self.actor = Actor(self.action_shape, robot_state_shape)
-        self.target_actor = copy.deepcopy(self.actor)
-        self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=lr)
-        self.critic = Critic(self.action_shape, robot_state_shape)
-        self.target_critic = copy.deepcopy(self.critic)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=lr)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.tau = tau
+        self.initial_random_steps = initial_random_steps
+
+        # loss parameters
+        self.lambda1 = lambda1
+        self.lambda2 = lambda2 / demo_batch_size
+
+        self.actor_losses = [[] for _ in range(n_agent)]
+        self.critic_losses = [[] for _ in range(n_agent)]
+        self.scores = [[] for _ in range(n_agent)]
+
+        # demo segmentation
+        self.demo_segmentation = TrajectorySegmenter(n_agent, obs_dim, len(demo), demo_batch_size)
+        self.demo_segmentation.segment(demo)
+
+        # initial state of each segment
+        self.initial_states = [self.demo_segmentation.obs_buf[i][0] for i in range(n_agent)]
+
+        self.local_env = [gym.make(env_id) for _ in range(n_agent)]
+        for i in range(n_agent):
+          self.local_env[i] = actionNormalizer(self.local_env[i])
+          theta_offset = np.arccos(self.initial_states[i][0])
+          print(theta_offset)
+          self.local_env[i] = rewardFunc(self.local_env[i], theta_offset)
+
+        # replay segmentation
+        self.replay_segmentation = TrajectorySegmenter(n_agent, obs_dim, memory_size, batch_size)
+
+        # noise
+        self.noise = OUNoise(
+            action_dim,
+            theta=ou_noise_theta,
+            sigma=ou_noise_sigma,
+        )
+
+        # device: cpu / gpu
+        self.device = [torch.device("cuda" if torch.cuda.is_available() else "cpu") for _ in range(n_agent)]
         print(self.device)
 
-        # Wrap your models with DataParallel
-        if torch.cuda.device_count() > 1:
-          print("Using", torch.cuda.device_count(), "GPUs!")
-          self.actor = torch.nn.DataParallel(self.actor)
-          self.target_actor = torch.nn.DataParallel(self.target_actor)
-          self.critic = torch.nn.DataParallel(self.critic)
-          self.target_critic = torch.nn.DataParallel(self.target_critic)
+        # global networks
+        self.global_actor = Actor(obs_dim, action_dim).to(self.device[0])
+        self.global_critic = Critic(obs_dim + action_dim).to(self.device[0])
+        # local networks
+        self.local_actor = [Actor(obs_dim, action_dim).to(self.device[i]) for i in range(n_agent)]
+        self.local_critic = [Critic(obs_dim + action_dim).to(self.device[i]) for i in range(n_agent)]
+
+        for i in range(n_agent):
+            self.local_actor[i].load_state_dict(self.global_actor.state_dict())
+            self.local_critic[i].load_state_dict(self.global_critic.state_dict())
+
+        # optimizer
+        for i in range(n_agent):
+          self.local_actor_optimizer = [optim.Adam(self.local_actor[i].parameters(), lr=3e-4) for i in range(n_agent)]
+          self.local_critic_optimizer = [optim.Adam(self.local_critic[i].parameters(), lr=1e-3) for i in range(n_agent)]
+
+        # transition to store in memory
+        self.transitions = [list() for _ in range(n_agent)]
+
+        # total steps count
+        self.total_step = 0
+
+        # max test steps
+        self.max_step = 5000
+
+    def select_action(self, states: np.ndarray) -> np.ndarray:
+        """Select an action from the input state."""
+        # if initial random action should be conducted
+        selected_actions = [0 for _ in range(self.n_agent)]
+        for i in range(self.n_agent):
+          if self.total_step < self.initial_random_steps:
+              selected_actions[i] = self.local_env[i].action_space.sample()
+          else:
+              selected_actions[i] = self.local_actor[i](
+                  torch.FloatTensor(states[i]).to(self.device[i])
+              ).detach().cpu().numpy()
+
+          # add noise for exploration during training
+          noise = self.noise.sample()
+          selected_actions[i] = np.clip(selected_actions[i] + noise, -1.0, 1.0)
+
+          self.transitions[i] = [states[i], selected_actions[i]]
+
+        return selected_actions
+
+    def step(self, actions) -> Tuple[np.ndarray, np.float64, bool]:
+        """Take an action and return the response of the env."""
+        next_states, rewards, dones = [[] for _ in range(self.n_agent)], [0 for _ in range(self.n_agent)], [0 for _ in range(self.n_agent)]
+        for i in range(self.n_agent):
+          next_states[i], rewards[i], dones[i], _ = self.local_env[i].step(actions[i])
+          self.transitions[i] += [rewards[i], next_states[i], dones[i]]
+          self.replay_segmentation.store(i, *self.transitions[i])
+
+        return next_states, rewards, dones
+
+    def update_model(self, agent_id) -> np.ndarray:
+        """Update the model by gradient descent."""
+        device = self.device[agent_id]
+
+        # sample batch from replay segments
+        samples = self.replay_segmentation.sample_batch(agent_id)
+        state = torch.FloatTensor(samples["obs"]).to(device)
+        next_state = torch.FloatTensor(samples["next_obs"]).to(device)
+        action = torch.FloatTensor(samples["acts"].reshape(-1, 1)).to(device)
+        reward = torch.FloatTensor(samples["rews"].reshape(-1, 1)).to(device)
+        done = torch.FloatTensor(samples["done"].reshape(-1, 1)).to(device)
+
+        # sample batch from demo segments
+        d_samples = self.demo_segmentation.sample_batch(agent_id)
+        d_state = torch.FloatTensor(d_samples["obs"]).to(device)
+        d_next_state = torch.FloatTensor(d_samples["next_obs"]).to(device)
+        d_action = torch.FloatTensor(d_samples["acts"].reshape(-1, 1)).to(device)
+        d_reward = torch.FloatTensor(d_samples["rews"].reshape(-1, 1)).to(device)
+        d_done = torch.FloatTensor(d_samples["done"].reshape(-1, 1)).to(device)
+
+        masks = 1 - done
+        next_action = self.global_actor(next_state)
+        next_value = self.global_critic(next_state, next_action)
+        curr_return = reward + self.gamma * next_value * masks
+        curr_return = curr_return.to(device).detach()
+
+        # train local critic
+        values = self.local_critic[agent_id](state, action)
+        local_critic_loss = F.mse_loss(values, curr_return)
+
+        self.local_critic_optimizer[agent_id].zero_grad()
+        local_critic_loss.backward()
+        self.local_critic_optimizer[agent_id].step()
+
+        # train local actor
+        # PG loss
+        pg_loss = -self.local_critic[agent_id](state, self.local_actor[agent_id](state)).mean()
+
+        # BC loss with Q filter
+        pred_action = self.local_actor[agent_id](d_state)
+        qf_mask = torch.gt(
+            self.local_critic[agent_id](d_state, d_action),
+            self.local_critic[agent_id](d_state, pred_action),
+        ).to(device)
+        qf_mask = qf_mask.float()
+        n_qf_mask = int(qf_mask.sum().item())
+
+        if n_qf_mask == 0:
+            bc_loss = torch.zeros(1, device=device)
         else:
-          self.actor = self.actor.to(self.device)
-          self.target_actor = self.target_actor.to(self.device)
-          self.critic = self.critic.to(self.device)
-          self.target_critic = self.target_critic.to(self.device)
+            bc_loss = (
+                torch.mul(pred_action, qf_mask) - torch.mul(d_action, qf_mask)
+            ).pow(2).sum() / n_qf_mask
 
-        self.pri_buffer = PrioritizedReplayBuffer(memory_size, alpha=0.6, beta=0.4)
-        self.loss_fn = torch.nn.MSELoss()
-        self.batch_size = batch_size
-        self.is_gpu = torch.cuda.is_available
-        self.noise = OrnsteinUhlenbeckProcess(size=self.action_shape)
-        self.grad_norm_clipping = grad_norm_clipping
-        self.tau = tau
-        self.num_agent = num_agent
+        local_actor_loss = self.lambda1 * pg_loss + self.lambda2 * bc_loss
 
-    @torch.no_grad()
-    def td_targeti(self, reward, vision, next_vision, robot_state, next_robot_state, done):
-        next_action = torch.tanh(self.target_actor(vision, robot_state))
-        next_q = self.target_critic(next_vision, next_robot_state, next_action)
-        td_targeti = reward.unsqueeze(1) + self.gamma * next_q*(1.-done.unsqueeze(1))
-        return td_targeti.float()
+        self.local_actor_optimizer[agent_id].zero_grad()
+        local_actor_loss.backward()
+        self.local_actor_optimizer[agent_id].step()
 
-    def update(self):
-      indice = self.pri_buffer.sample_indices(self.batch_size)
-      sample = self.pri_buffer.__getitem__(indice)
-      obs, action, reward, next_obs, done = sample['obs'], sample['act'], sample['rew'], sample['obs_next'], sample['terminated']
 
-      print("run1")
-      robot_state = [
-          np.array(obs['robot0_eef_pos'], dtype=np.float32).flatten(),
-          np.array(obs['robot0_eef_quat'], dtype=np.float32).flatten()
-      ]
+        # To-Do: Update the gobal agent every x episode: Refer to TD3
+        self.global_soft_update(agent_id)
 
-      vision = np.array(obs['vision'], dtype=np.float32)
-      next_robot_state = [
-          np.array(next_obs['robot0_eef_pos'], dtype=np.float32).flatten(),
-          np.array(next_obs['robot0_eef_quat'], dtype=np.float32).flatten()
-      ]
-      print("run2")
-      next_vision = np.array(next_obs['vision'], dtype=np.float32)
+        return local_actor_loss.data.detach().cpu().numpy(), local_critic_loss.data.detach().cpu().numpy()
 
-      robot_state = np.concatenate(robot_state)
-      next_robot_state = np.concatenate(next_robot_state)
-      robot_state = torch.tensor(robot_state, dtype=torch.float32)
-      print("run3")
-      next_robot_state = torch.tensor(next_robot_state, dtype=torch.float32)
-      vision = torch.tensor(vision, dtype=torch.float32)
-      next_vision = torch.tensor(next_vision, dtype=torch.float32)
+    def train(self, num_frames: int, plotting_interval: int = 200):
+        """Train the agent."""
+        states = [[] for _ in range(self.n_agent)]
+        for i in range(self.n_agent):
+          states[i] = self.local_env[i].reset(options={'theta': np.arccos(self.initial_states[i][0]), 'theta_dot': self.initial_states[i][2]}, seed=0)
+          # states[i] = self.local_env[i].reset(seed=0)
 
-      action = action.to(self.device)
+        score = [0 for _ in range(self.n_agent)]
 
-      reward = torch.FloatTensor(reward).to(self.device)
-      done = np.array(done)
-      done = torch.IntTensor(done).to(self.device)
+        for self.total_step in range(1, num_frames + 1):
+            actions = self.select_action(states)
+            next_states, rewards, dones = self.step(actions)
+            states = next_states
 
-      td_targeti = self.td_targeti(reward, vision, next_vision, robot_state, next_robot_state, done)
-      current_q = self.critic(vision, robot_state, action)
+            for i in range(self.n_agent):
+              score[i] += rewards[i]
+              # if episode ends
+              if dones[i]:
+                states[i] = self.local_env[i].reset(seed=0)
+                self.scores[i].append(score[i])
+                score[i] = 0
 
-      critic_loss = self.loss_fn(current_q,td_targeti)
-      """ Update priorities based on TD errors """
-      td_errors = (td_targeti - current_q).t()          # Calculate the TD Errors
-      self.pri_buffer.update_weight(indice, td_errors.data.detach().cpu().numpy())
+              # if training is ready
+              if self.total_step > self.initial_random_steps:
+                  actor_loss, critic_loss = self.update_model(i)
+                  self.actor_losses[i].append(actor_loss)
+                  self.critic_losses[i].append(critic_loss)
 
-      self.critic_optimizer.zero_grad()
-      critic_loss.backward()
-      clip_grad_norm_(self.critic.parameters(),max_norm=self.grad_norm_clipping)
-      self.critic_optimizer.step()
-      ac_up = self.actor(obs)
-      ac = torch.tanh(ac_up)
-      pr = -self.critic(obs,ac).mean()
-      pg = (ac.pow(2)).mean()
-      actor_loss = pr + pg*1e-3
-      self.actor_optimizer.zero_grad()
-      clip_grad_norm_(self.actor.parameters(),max_norm=self.grad_norm_clipping)
-      actor_loss.backward()
-      self.actor_optimizer.step()
+            # plotting
+            if self.total_step % plotting_interval == 0:
+                self.plot_train()
 
-      for target_param, param in zip(self.target_actor.parameters(), self.actor.parameters()):
-        target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-      for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
-        target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+        for i in range(self.n_agent):
+          self.local_env[i].close()
 
-    def get_action(self, vision, robot_state, greedy=False):
-        vision = vision.to(self.device)
-        robot_state = robot_state.to(self.device)
-        action = torch.tanh(self.actor(vision, robot_state))
-        if not greedy:
-            action += torch.tensor(self.noise.sample(),dtype=torch.float).cuda()
-        return np.clip(action.detach().cpu().numpy(),-1.0,1.0)
+    def test(self):
+        """Test the global agent."""
+        device = self.device[0]
+        state = self.global_env.reset(seed=0)
+        done = False
+        score = 0
+        test_step = 0
 
-    def load_checkpoint(self, filename):
-      checkpoint = torch.load(filename)
+        while not done or self.max_step > test_step:
+            action = self.global_actor(
+                torch.FloatTensor(state).to(device)).detach().cpu().numpy()
 
-      self.actor.load_state_dict(checkpoint['actor_state_dict'])
-      self.target_actor.load_state_dict(checkpoint['target_actor_state_dict'])
-      self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+            next_state, reward, done, _ = self.global_env.step(action)
 
-      self.critic.load_state_dict(checkpoint['critic_state_dict'])
-      self.target_critic.load_state_dict(checkpoint['target_critic_state_dict'])
-      self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+            state = next_state
+            score += reward
+            test_step += 1
+
+        print("score: ", score)
+        self.global_env.close()
+
+    def global_soft_update(self, agent_id):
+        """Soft-update: global = tau*local + (1-tau)*global."""
+        tau = self.tau
+
+        for g_param, l_param in zip(
+            self.global_actor.parameters(), self.local_actor[agent_id].parameters()
+        ):
+            g_param.data.copy_(tau * l_param.data + (1.0 - tau) * g_param.data)
+
+        for g_param, l_param in zip(
+            self.global_critic.parameters(), self.local_critic[agent_id].parameters()
+        ):
+            g_param.data.copy_(tau * l_param.data + (1.0 - tau) * g_param.data)
+
+    def plot_train(self):
+        """Plot the training progresses."""
+        def subplot(loc: int, title: str, values: List[float]):
+            plt.subplot(loc)
+            plt.title(title)
+            plt.plot(values)
+            # adjust the spacing between subplots
+            plt.subplots_adjust(hspace=0.2)
+
+        # loop over the agents
+        subplot_params = []
+        for i in range(self.n_agent):
+            # calculate the subplot location based on the row and column index
+            loc = 100*self.n_agent + 30 + 3*i
+
+            # plot the score, actor_loss and critic_loss for each agent
+            subplot_params.extend([(loc+1, f"frame {self.total_step}. score: {np.mean(self.scores[i][-10:])}", self.scores[i]),
+            (loc + 2, "actor_loss", self.actor_losses[i]),
+            (loc + 3, "critic_loss", self.critic_losses[i])])
+
+        clear_output(True)
+        # create a figure with self.n_agent rows and 3 columns of subplots
+        plt.figure(figsize=(20, 5*self.n_agent))
+        for loc, title, values in subplot_params:
+          subplot(loc, title, values)
+        plt.show()

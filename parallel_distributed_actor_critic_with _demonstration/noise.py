@@ -1,32 +1,37 @@
 import numpy as np
+import random
+import copy
 
-class OrnsteinUhlenbeckProcess:
-    def __init__(self, theta=0.15, mu=0.0, sigma=0.2, dt=1e-2, x0=None, size=1, sigma_min=None, n_steps_annealing=1000):
+class OUNoise:
+    """Ornstein-Uhlenbeck process.
+    Taken from Udacity deep-reinforcement-learning github repository:
+    https://github.com/udacity/deep-reinforcement-learning/blob/master/
+    ddpg-pendulum/ddpg_agent.py
+    """
+
+    def __init__(
+        self,
+        size: int,
+        mu: float = 0.0,
+        theta: float = 0.15,
+        sigma: float = 0.2,
+    ):
+        """Initialize parameters and noise process."""
+        self.state = np.float64(0.0)
+        self.mu = mu * np.ones(size)
         self.theta = theta
-        self.mu = mu
         self.sigma = sigma
-        self.dt = dt
-        self.x0 = x0
-        self.size = size
-        self.num_steps = 0
+        self.reset()
 
-        self.x_prev = self.x0 if self.x0 is not None else np.zeros(self.size)
+    def reset(self):
+        """Reset the internal state (= noise) to mean (mu)."""
+        self.state = copy.copy(self.mu)
 
-        if sigma_min is not None:
-            self.m = -float(sigma - sigma_min) / float(n_steps_annealing)
-            self.c = sigma
-            self.sigma_min = sigma_min
-        else:
-            self.m = 0
-            self.c = sigma
-            self.sigma_min = sigma
-
-    def current_sigma(self):
-        sigma = max(self.sigma_min, self.m * float(self.num_steps) + self.c)
-        return sigma
-
-    def sample(self):
-        x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.current_sigma() * np.sqrt(self.dt) * np.random.normal(size=self.size)
-        self.x_prev = x
-        self.num_steps += 1
-        return x
+    def sample(self) -> np.ndarray:
+        """Update internal state and return it as a noise sample."""
+        x = self.state
+        dx = self.theta * (self.mu - x) + self.sigma * np.array(
+            [random.random() for _ in range(len(x))]
+        )
+        self.state = x + dx
+        return self.state

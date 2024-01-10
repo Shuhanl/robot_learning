@@ -1,6 +1,6 @@
 import copy
 import torch
-from torch import nn
+import numpy as np
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 from actor_critic_nn import Actor, Critic
@@ -55,7 +55,6 @@ class Learner:
       sample = self.pri_buffer.__getitem__(indice)
       obs, action, reward, next_obs, done = sample['obs'], sample['act'], sample['rew'], sample['obs_next'], sample['terminated']
 
-      print("run1")
       robot_state = [
           np.array(obs['robot0_eef_pos'], dtype=np.float32).flatten(),
           np.array(obs['robot0_eef_quat'], dtype=np.float32).flatten()
@@ -66,13 +65,12 @@ class Learner:
           np.array(next_obs['robot0_eef_pos'], dtype=np.float32).flatten(),
           np.array(next_obs['robot0_eef_quat'], dtype=np.float32).flatten()
       ]
-      print("run2")
       next_vision = np.array(next_obs['vision'], dtype=np.float32)
 
       robot_state = np.concatenate(robot_state)
       next_robot_state = np.concatenate(next_robot_state)
       robot_state = torch.tensor(robot_state, dtype=torch.float32)
-      print("run3")
+
       next_robot_state = torch.tensor(next_robot_state, dtype=torch.float32)
       vision = torch.tensor(vision, dtype=torch.float32)
       next_vision = torch.tensor(next_vision, dtype=torch.float32)
