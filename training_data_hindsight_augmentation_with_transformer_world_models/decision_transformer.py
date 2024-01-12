@@ -3,11 +3,10 @@ import torch.nn as nn
 
 import transformers
 
-from decision_transformer.models.model import TrajectoryModel
-from decision_transformer.models.trajectory_gpt2 import GPT2Model
+from trajectory_gpt2 import GPT2Model
 
 
-class DecisionTransformer(TrajectoryModel):
+class DecisionTransformer(nn.Module):
 
     """
     This model uses GPT to model (Return_1, state_1, action_1, Return_2, state_2, ...)
@@ -23,7 +22,10 @@ class DecisionTransformer(TrajectoryModel):
             action_tanh=True,
             **kwargs
     ):
-        super().__init__(state_dim, act_dim, max_length=max_length)
+        super().__init__()
+            self.state_dim = state_dim
+            self.act_dim = act_dim
+            self.max_length = max_length
 
         self.hidden_size = hidden_size
         config = transformers.GPT2Config(

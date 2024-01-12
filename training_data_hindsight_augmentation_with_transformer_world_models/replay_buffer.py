@@ -91,7 +91,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         self._min_prio = min(self._min_prio, weight.min())
 
 
-    def __getitem__(self, index: Union[slice, int, List[int], np.ndarray]) -> Batch:
+    def getitem(self, index: Union[slice, int, List[int], np.ndarray]) -> Batch:
         if isinstance(index, slice):  # change slice to np array
             # buffer[:] will get all available data
             indices = self.sample_indices(0) if index == slice(None) \

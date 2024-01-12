@@ -8,7 +8,7 @@ from replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
 
 class Learner:
-    def __init__(self, action_shape, robot_state_shape, num_agent, gamma=0.95,lr=0.001,batch_size=1024,memory_size=int(1e6),tau=0.01,grad_norm_clipping = 0.5):
+    def __init__(self, action_shape, robot_state_shape, gamma=0.95,lr=0.001,batch_size=1024,memory_size=int(1e6),tau=0.01,grad_norm_clipping = 0.5):
         self.action_shape = action_shape
         self.robot_state_shape = robot_state_shape
         self.gamma = gamma
@@ -41,7 +41,6 @@ class Learner:
         self.noise = OrnsteinUhlenbeckProcess(size=self.action_shape)
         self.grad_norm_clipping = grad_norm_clipping
         self.tau = tau
-        self.num_agent = num_agent
 
     @torch.no_grad()
     def td_targeti(self, reward, vision, next_vision, robot_state, next_robot_state, done):
@@ -52,7 +51,7 @@ class Learner:
 
     def update(self):
       indice = self.pri_buffer.sample_indices(self.batch_size)
-      sample = self.pri_buffer.__getitem__(indice)
+      sample = self.pri_buffer.getitem(indice)
       obs, action, reward, next_obs, done = sample['obs'], sample['act'], sample['rew'], sample['obs_next'], sample['terminated']
 
       robot_state = [
