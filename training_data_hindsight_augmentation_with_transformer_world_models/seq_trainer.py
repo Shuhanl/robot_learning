@@ -5,10 +5,9 @@ from decision_transformer import DecisionTransformer
 
 class SequenceTrainer():
 
-    def __init__(self, state_dim, act_dim, batch_size, pri_buffer, num_trajectories, device, eval_fns=None):        
+    def __init__(self, state_dim, act_dim, batch_size, pri_buffer, num_trajectories, device):        
         self.batch_size = batch_size
         self.loss_fn = lambda s_hat, a_hat, r_hat, s, a, r: torch.mean((s_hat - s)**2) + torch.mean((a_hat - a)**2) + torch.mean((r_hat - r)**2)
-        self.eval_fns = [] if eval_fns is None else eval_fns
         self.diagnostics = dict()
         self.device = device
         self.num_trajectories = num_trajectories
@@ -34,48 +33,6 @@ class SequenceTrainer():
     )
 
         self.start_time = time.time()
-
-    def eval_episodes(self, target_rew):
-        def fn(model):
-            returns, lengths = [], []
-            for _ in range(self.num_eval_episodes):
-                with torch.no_grad():
-                    if model_type == 'dt':
-                        ret, length = evaluate_episode_rtg(
-                            env,
-                            state_dim,
-                            act_dim,
-                            model,
-                            max_ep_len=max_ep_len,
-                            scale=scale,
-                            target_return=target_rew/scale,
-                            mode=mode,
-                            state_mean=state_mean,
-                            state_std=state_std,
-                            device=device,
-                        )
-                    else:
-                        ret, length = evaluate_episode(
-                            env,
-                            state_dim,
-                            act_dim,
-                            model,
-                            max_ep_len=max_ep_len,
-                            target_return=target_rew/scale,
-                            mode=mode,
-                            state_mean=state_mean,
-                            state_std=state_std,
-                            device=device,
-                        )
-                returns.append(ret)
-                lengths.append(length)
-            return {
-                f'target_{target_rew}_return_mean': np.mean(returns),
-                f'target_{target_rew}_return_std': np.std(returns),
-                f'target_{target_rew}_length_mean': np.mean(lengths),
-                f'target_{target_rew}_length_std': np.std(lengths),
-            }
-        return fn
 
     def get_batch(self, batch_size=256, max_len=K):
 
@@ -162,16 +119,7 @@ class SequenceTrainer():
 
         logs['time/training'] = time.time() - train_start
 
-        eval_start = time.time()
-
-        self.model.eval()
-        for eval_fn in self.eval_fns:
-            outputs = eval_fn(self.model)
-            for k, v in outputs.items():
-                logs[f'evaluation/{k}'] = v
-
         logs['time/total'] = time.time() - self.start_time
-        logs['time/evaluation'] = time.time() - eval_start
         logs['training/train_loss_mean'] = np.mean(train_losses)
         logs['training/train_loss_std'] = np.std(train_losses)
 
