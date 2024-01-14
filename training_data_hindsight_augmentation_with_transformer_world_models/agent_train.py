@@ -7,7 +7,7 @@ from actor_critic_nn import Actor, Critic
 from replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
 
-class Learner:
+class AgentTrainer():
     def __init__(self, action_shape, robot_state_shape, gamma=0.95,lr=0.001,batch_size=1024,memory_size=int(1e6),tau=0.01,grad_norm_clipping = 0.5):
         self.action_shape = action_shape
         self.robot_state_shape = robot_state_shape
