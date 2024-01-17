@@ -4,7 +4,7 @@ import numpy as np
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 from actor_critic import Actor, Critic
-from replay_buffer import PrioritizedReplayBuffer
+from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
 
 class AgentTrainer():
@@ -34,9 +34,9 @@ class AgentTrainer():
           self.critic = self.critic.to(self.device)
           self.target_critic = self.target_critic.to(self.device)
 
-        self.pri_buffer = PrioritizedReplayBuffer(memory_size, alpha=0.6, beta=0.4)
-        self.loss_fn = torch.nn.MSELoss()
         self.batch_size = batch_size
+        self.pri_buffer = PrioritizedReplayBuffer(obs_dim, acts_dim, memory_size, sequence_length, batch_size, alpha=0.6, beta=0.4)
+        self.loss_fn = torch.nn.MSELoss()
         self.is_gpu = torch.cuda.is_available
         self.noise = OrnsteinUhlenbeckProcess(size=self.action_shape)
         self.grad_norm_clipping = grad_norm_clipping
@@ -50,8 +50,7 @@ class AgentTrainer():
         return td_targeti.float()
 
     def update(self):
-      indice = self.pri_buffer.sample_indices(self.batch_size)
-      sample = self.pri_buffer.getitem(indice)
+      sample = self.pri_buffer.sample_batch()
       obs, action, reward, next_obs, done = sample['obs'], sample['act'], sample['rew'], sample['obs_next'], sample['terminated']
 
       robot_state = [
@@ -86,7 +85,8 @@ class AgentTrainer():
       critic_loss = self.loss_fn(current_q,td_targeti)
       """ Update priorities based on TD errors """
       td_errors = (td_targeti - current_q).t()          # Calculate the TD Errors
-      self.pri_buffer.update_weight(indice, td_errors.data.detach().cpu().numpy())
+
+      self.pri_buffer.update_priorities(indice, td_errors.data.detach().cpu().numpy())
 
       self.critic_optimizer.zero_grad()
       critic_loss.backward()
