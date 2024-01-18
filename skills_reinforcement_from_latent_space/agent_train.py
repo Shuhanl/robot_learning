@@ -35,7 +35,7 @@ class AgentTrainer():
           self.target_critic = self.target_critic.to(self.device)
 
         self.batch_size = batch_size
-        self.pri_buffer = PrioritizedReplayBuffer(obs_dim, acts_dim, memory_size, sequence_length, batch_size, alpha=0.6, beta=0.4)
+        self.pri_buffer = PrioritizedReplayBuffer(vision_dim, pos_dim, quat_dim, acts_dim, memory_size, sequence_length, batch_size, alpha=0.6, beta=0.4)
         self.loss_fn = torch.nn.MSELoss()
         self.is_gpu = torch.cuda.is_available
         self.noise = OrnsteinUhlenbeckProcess(size=self.action_shape)

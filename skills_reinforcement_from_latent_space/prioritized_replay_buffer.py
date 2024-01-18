@@ -7,10 +7,17 @@ from segment_tree import MinSegmentTree, SumSegmentTree
 class ReplayBuffer:
     """A simple numpy replay buffer."""
 
-    def __init__(self, obs_dim: int, acts_dim: int, size: int, sequence_length: int = 100, batch_size: int = 1024):
+    def __init__(self, vision_dim, pos_dim: int, quat_dim: int, acts_dim: int, size: int, sequence_length: int = 100, batch_size: int = 1024):
         self.sequence_length = sequence_length
-        self.obs_buf = np.zeros([size, sequence_length, obs_dim], dtype=np.float32)
-        self.next_obs_buf = np.zeros([size, sequence_length, obs_dim], dtype=np.float32)
+
+        self.vision_buf = np.zeros([size, sequence_length, *vision_dim], dtype=np.float32)
+        self.pos_buf = np.zeros([size, sequence_length, pos_dim], dtype=np.float32)
+        self.quat_buf = np.zeros([size, sequence_length, quat_dim], dtype=np.float32)
+
+        self.next_vision_buf = np.zeros([size, sequence_length, *vision_dim], dtype=np.float32)
+        self.next_pos_buf = np.zeros([size, sequence_length, pos_dim], dtype=np.float32)
+        self.next_quat_buf = np.zeros([size, sequence_length, quat_dim], dtype=np.float32)
+
         self.acts_buf = np.zeros([size, sequence_length, acts_dim], dtype=np.float32)
         self.rews_buf = np.zeros([size, sequence_length], dtype=np.float32)
         self.done_buf = np.zeros([size, sequence_length], dtype=np.float32)
@@ -18,8 +25,17 @@ class ReplayBuffer:
         self.ptr, self.size = 0, 0
 
     def store(self, obs: np.ndarray, act: np.ndarray, rew: np.ndarray, next_obs: np.ndarray, done: np.ndarray):
-        self.obs_buf[self.ptr] = obs
-        self.next_obs_buf[self.ptr] = next_obs
+        vision, pos, quat = obs['frontview_image'], obs['robot0_eef_pos'], obs['robot0_eef_quat']
+        next_vision, next_pos, next_quat = next_obs['frontview_image'], next_obs['robot0_eef_pos'], next_obs['robot0_eef_quat']
+
+        self.vision_buf[self.ptr] = vision
+        self.pos_buf[self.ptr] = pos
+        self.quat_buf[self.ptr] = quat
+
+        self.next_vision_buf[self.ptr] = next_vision
+        self.next_pos_buf[self.ptr] = next_pos
+        self.next_quat_buf[self.ptr] = next_quat
+        
         self.acts_buf[self.ptr] = act
         self.rews_buf[self.ptr] = rew
         self.done_buf[self.ptr] = done
@@ -54,7 +70,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     
     def __init__(
         self, 
-        obs_dim: int,
+        vision_dim,
+        pos_dim: int,
+        quat_dim: int,
         acts_dim: int,
         size: int, 
         sequence_length: int = 100,
@@ -65,7 +83,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         """Initialization."""
         assert alpha >= 0
         
-        super(PrioritizedReplayBuffer, self).__init__(obs_dim, acts_dim, size, sequence_length, batch_size)
+        super(PrioritizedReplayBuffer, self).__init__(vision_dim, pos_dim, quat_dim, acts_dim, size, sequence_length, batch_size)
         self.max_priority, self.tree_ptr = 1.0, 0
         self.alpha = alpha
         self.beta = beta
