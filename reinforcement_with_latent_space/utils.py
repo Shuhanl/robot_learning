@@ -52,3 +52,16 @@ def plot_latent_space(encoder, vision_network, video_batch, proprioception_batch
     plt.title('Latent Space Represented using t-SNE')
     plt.show()
 
+def save_checkpoint(model, model_name, filename):
+    
+    checkpoint = torch.load(filename)
+    model.save_state_dict(checkpoint[model_name])
+    print('Model Saved')
+
+def load_checkpoint(model, model_name, filename):
+
+    checkpoint = torch.load(filename)
+    model.load_state_dict(checkpoint[model_name])
+
+
+
