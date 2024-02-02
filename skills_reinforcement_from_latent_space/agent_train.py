@@ -25,14 +25,13 @@ class AgentTrainer():
         if torch.cuda.device_count() > 1:
           print("Using", torch.cuda.device_count(), "GPUs!")
           self.actor = torch.nn.DataParallel(self.actor)
-          self.target_actor = torch.nn.DataParallel(self.target_actor)
           self.critic = torch.nn.DataParallel(self.critic)
-          self.target_critic = torch.nn.DataParallel(self.target_critic)
+
         else:
+          print("Using single GPU")
           self.actor = self.actor.to(self.device)
-          self.target_actor = self.target_actor.to(self.device)
           self.critic = self.critic.to(self.device)
-          self.target_critic = self.target_critic.to(self.device)
+
 
         self.batch_size = batch_size
         self.pri_buffer = PrioritizedReplayBuffer(vision_dim, pos_dim, quat_dim, acts_dim, memory_size, sequence_length, batch_size, alpha=0.6, beta=0.4)

@@ -11,9 +11,7 @@ from utils import compute_loss, compute_regularisation_loss
 import parameters as params
   
 class AgentTrainer():
-  def __init__(self, action_shape, robot_state_shape, gamma=0.95, tau=0.01,):
-    self.action_shape = action_shape
-    self.robot_state_shape = robot_state_shape
+  def __init__(self, gamma=0.95, tau=0.01,):
     self.gamma = gamma
 
     print(params.device)
@@ -28,26 +26,33 @@ class AgentTrainer():
     self.actor = Actor()
     self.target_actor = copy.deepcopy(self.actor)
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=params.lr)
-    self.critic = Critic(self.action_shape, robot_state_shape)
+    self.critic = Critic()
     self.target_critic = copy.deepcopy(self.critic)
     self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=params.lr)
-
-    # Wrap your models with DataParallel
-    if torch.cuda.device_count() > 1:
-      print("Using", torch.cuda.device_count(), "GPUs!")
-      self.actor = torch.nn.DataParallel(self.actor)
-      self.target_actor = torch.nn.DataParallel(self.target_actor)
-      self.critic = torch.nn.DataParallel(self.critic)
-      self.target_critic = torch.nn.DataParallel(self.target_critic)
-    else:
-      self.actor = self.actor.to(params.device)
-      self.target_actor = self.target_actor.to(params.device)
-      self.critic = self.critic.to(params.device)
-      self.target_critic = self.target_critic.to(params.device)
 
     self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
     self.noise = OrnsteinUhlenbeckProcess(size=params.action_dim)
     self.tau = tau
+
+    # Wrap your models with DataParallel
+    if torch.cuda.device_count() > 1:
+      print("Using", torch.cuda.device_count(), "GPUs!")
+      self.vision_network = torch.nn.DataParallel(self.vision_network)
+      self.plan_recognition = torch.nn.DataParallel(self.plan_recognition)
+      self.plan_proposal = torch.nn.DataParallel(self.plan_proposal)
+
+      self.actor = torch.nn.DataParallel(self.actor)
+      self.critic = torch.nn.DataParallel(self.critic)
+
+    else:
+      print("Using single GPU")
+      self.vision_network = self.vision_network.to(params.device)
+      self.plan_recognition = self.plan_recognition.to(params.device)
+      self.plan_proposal = self.plan_proposal.to(params.device)
+
+      self.actor = self.actor.to(params.device)
+      self.critic = self.critic.to(params.device)
+
 
   def get_action(self, goal_embeded, current_embeded, greedy=False):
 
@@ -128,7 +133,7 @@ class AgentTrainer():
     """ Update priorities based on TD errors """
     td_errors = (target_q - current_q).t()          # Calculate the TD Errors
 
-    self.pri_buffer.update_priorities(indice, td_errors.data.detach().cpu().numpy())
+    self.pri_buffer.update_priorities(indices, td_errors.data.detach().cpu().numpy())
 
     action = self.get_action(goal_embeded, current_embeded, greedy=False)
     pr = -self.critic(current_embeded, proprioception, action).mean()
@@ -149,28 +154,3 @@ class AgentTrainer():
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-
-  def load_checkpoint(self, filename):
-    checkpoint = torch.load(filename)
-
-    self.actor.load_state_dict(checkpoint['actor_state_dict'])
-    self.target_actor.load_state_dict(checkpoint['target_actor_state_dict'])
-    self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
-
-    self.critic.load_state_dict(checkpoint['critic_state_dict'])
-    self.target_critic.load_state_dict(checkpoint['target_critic_state_dict'])
-    self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
-
-  def save_checkpoint(self, filename):
-      
-    checkpoint = torch.load(filename)
-
-    self.actor.save_state_dict(checkpoint['actor_state_dict'])
-    self.target_actor.save_state_dict(checkpoint['target_actor_state_dict'])
-    self.actor_optimizer.save_state_dict(checkpoint['actor_optimizer_state_dict'])
-
-    self.critic.save_state_dict(checkpoint['critic_state_dict'])
-    self.target_critic.save_state_dict(checkpoint['target_critic_state_dict'])
-    self.critic_optimizer.save_state_dict(checkpoint['critic_optimizer_state_dict'])
-
-    print('Model Saved')

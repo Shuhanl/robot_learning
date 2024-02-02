@@ -1,19 +1,5 @@
 import torch
 
-# Trainer flags
-GPUS = 3
-NUM_NODES = 1
-ACCELERATOR = "ddp"
-PLUGINS = "ddp_sharded"
-PRECISION = 16
-MAX_STEPS = 10
-LIMIT_TRAIN_BATCHES = 10
-VAL_CHECK_INTERVAL = 0.5  # i.e. 0.1 means 10 times every epoch
-SWA = True
-FAST_DEV_RUN = False
-LOG_GPU_MEMORY = True
-PROFILER = "simple"  # one of 'simple' or 'advanced' (i.e. function level) or 'pytorch' (https://pytorch-lightning.readthedocs.io/en/stable/profiler.html)
-
 # Data parameters
 vision_dim = (3, 299, 299)
 proprioception_dim = 8
