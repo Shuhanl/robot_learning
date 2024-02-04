@@ -7,4 +7,3 @@ def image_process(image):
     image = image.unsqueeze(1)
     image = F.interpolate(image, size=(64, 64), mode='bilinear', align_corners=False)
     return image
-

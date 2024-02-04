@@ -23,8 +23,6 @@ class RobotSimulator:
         else:
             self.physicsClient = p.connect(p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.resetSimulation()
-        p.configureDebugVisualizer(p.COV_ENABLE_GUI)
 
     def load_robot(self, urdf_path, initial_position=[0,0,1]):
         """
