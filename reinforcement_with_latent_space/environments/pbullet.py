@@ -5,7 +5,7 @@ import pybullet_data
 import gym
 
 
-class Environment(gym.Env):
+class Pbullet(gym.Env):
     def __init__(self, gui=True):
         """
         Initialize the simulator.
