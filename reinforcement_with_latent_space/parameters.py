@@ -20,6 +20,5 @@ grad_norm_clipping = 0.5
 N_EPOCH = 50
 WINDOW_SIZE = 32
 BS = 64
-LR = 2e-4
 BETA = 0.01
 NUM_WORKERS = 12

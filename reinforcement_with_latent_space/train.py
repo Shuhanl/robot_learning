@@ -54,33 +54,36 @@ class AgentTrainer():
       self.critic = self.critic.to(params.device)
 
 
-  def get_action(self, goal_embeded, current_embeded, greedy=False):
+  def get_action(self, goal, vision, proprioception, greedy=False):
 
-    proposal_dist = self.plan_proposal(goal_embeded, current_embeded)
+    goal_embeded = self.vision_network(goal)
+    vision_embeded = self.vision_network(vision)
+
+    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
     proposal_latent = proposal_dist.resample()
-    action = self.actor(current_embeded, proposal_latent, goal_embeded)
+    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
     if not greedy:
         action += torch.tensor(self.noise.sample(),dtype=torch.float).cuda()
     return np.clip(action.detach().cpu().numpy(),-1.0,1.0)
   
-  def pre_train(self, goal, current, actions_label, video, proprioceptions):
+  def pre_train(self, goal, vision, actions_label, video, proprioception):
 
     goal_embeded = self.vision_network(goal)
-    current_embeded = self.vision_network(current)
+    vision_embeded = self.vision_network(vision)
     video_embeded = torch.stack([self.vision_network(video[:, i]) for i in range(params.sequence_length)], dim=1)
     # Combine CNN output with proprioception data
-    combined = torch.cat([video_embeded, proprioceptions, actions_label], dim=-1)
+    combined = torch.cat([video_embeded, proprioception, actions_label], dim=-1)
   
     recognition_dist = self.plan_recognition(combined)
-    proposal_dist = self.plan_proposal(goal_embeded, current_embeded)
+    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
 
     kl_loss = compute_regularisation_loss(recognition_dist, proposal_dist)
     normal_kl_loss = torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - 
                                                  proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
     proposal_latent = proposal_dist.resample()
-    actions = self.actor(current_embeded, proposal_latent, goal_embeded)
+    actions = self.actor(vision_embeded, proposal_latent, goal_embeded)
 
     recon_loss = compute_loss(actions_label, actions, params.sequence_length)
 
@@ -110,24 +113,30 @@ class AgentTrainer():
     return loss.item()
   
   @torch.no_grad()
-  def td_target(self, goal_embeded, reward, current_embeded, next_embeded, next_proprioception, done):
+  def td_target(self, goal, reward, vision, next_vision, next_proprioception, done):
 
-    next_action = self.get_action(goal_embeded, current_embeded)
-    next_q = self.target_critic(next_embeded, next_proprioception, next_action)
+    next_action = self.get_action(goal, vision)
+
+    next_vision_embeded = self.vision_network(next_vision)
+    next_q = self.target_critic(next_vision_embeded, next_proprioception, next_action)
     target = reward.unsqueeze(1) + self.gamma * next_q*(1.-done.unsqueeze(1))
 
     return target.float()
 
-  def fine_tune(self):
+  def init_buffer(self, vision, proprioception, action, 
+              reward, next_vision, next_proprioception, done):
+    
+    self.pri_buffer.store(vision, proprioception, action, reward, next_vision, next_proprioception, done)
+
+
+  def fine_tune(self, goal):
 
     vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = self.pri_buffer.sample_batch()
+   
+    target_q = self.td_target(goal, reward, vision, next_vision, next_proprioception, done)
 
-    goal_embeded = self.vision_network(goal)
-    current_embeded = self.vision_network(vision)
-    next_embeded = self.vision_network(next_vision)
-    
-    target_q = self.td_target(goal_embeded, reward, current_embeded, next_embeded, next_proprioception, done)
-    current_q = self.critic(current_embeded, proprioception, action)
+    vision_embeded = self.vision_network(vision)
+    current_q = self.critic(vision_embeded, proprioception, action)
 
     critic_loss = torch.nn.MSELoss(current_q, target_q)
     """ Update priorities based on TD errors """
@@ -135,8 +144,8 @@ class AgentTrainer():
 
     self.pri_buffer.update_priorities(indices, td_errors.data.detach().cpu().numpy())
 
-    action = self.get_action(goal_embeded, current_embeded, greedy=False)
-    pr = -self.critic(current_embeded, proprioception, action).mean()
+    action = self.get_action(goal, vision, greedy=False)
+    pr = -self.critic(vision_embeded, proprioception, action).mean()
     pg = (action.pow(2)).mean()
     actor_loss = pr + pg*1e-3
 
@@ -154,3 +163,34 @@ class AgentTrainer():
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
+  def save_checkpoint(self, filename):
+      
+      checkpoint = torch.load(filename)
+
+      self.vision_network._save_to_state_dict(checkpoint['vision_network_state_dict'])
+      self.plan_recognition._save_to_state_dict(checkpoint['plan_recognition_state_dict'])
+      self.plan_proposal._save_to_state_dict(checkpoint['plan_proposal_state_dict'])
+      
+      self.actor._save_to_state_dict(checkpoint['actor_state_dict'])
+      self.target_actor._save_to_state_dict(checkpoint['target_actor_state_dict'])
+
+      self.critic._save_to_state_dict(checkpoint['critic_state_dict'])
+      self.target_critic._save_to_state_dict(checkpoint['target_critic_state_dict'])
+
+      print('Model saved')
+
+  def load_checkpoint(self, filename):
+      checkpoint = torch.load(filename)
+
+      self.vision_network._load_from_state_dict(checkpoint['vision_network_state_dict'])
+      self.plan_recognition._load_from_state_dict(checkpoint['plan_recognition_state_dict'])
+      self.plan_proposal._load_from_state_dict(checkpoint['plan_proposal_state_dict'])
+
+      self.actor.load_state_dict(checkpoint['actor_state_dict'])
+      self.target_actor.load_state_dict(checkpoint['target_actor_state_dict'])
+
+      self.critic.load_state_dict(checkpoint['critic_state_dict'])
+      self.target_critic.load_state_dict(checkpoint['target_critic_state_dict'])
+
+      print('Model loaded')

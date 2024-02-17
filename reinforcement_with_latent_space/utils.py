@@ -1,8 +1,20 @@
 import torch
 import torch.distributions.kl as kl
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
+
+def convert_demonstration(data_bacth):
+
+    observation, actions = data_bacth
+    image_obs = observation["image"]
+    # rescales rgb data and changes them to floats
+    rgb = image_obs["base_camera"]["rgb"] / 255.0
+    proprioception = observation["state"]
+    goal = rgb[-1, :]
+    current = rgb[0, :]
+    video = rgb
+
+    return goal, current, actions, video, proprioception
 
 def compute_loss(labels, predictions, mask, seq_lens):
     nll = -predictions.log_prob(labels).sum(dim=2)
@@ -44,17 +56,6 @@ def plot_latent_space(encoder, vision_network, video_batch, proprioception_batch
     plt.ylabel('t-SNE feature 2')
     plt.title('Latent Space Represented using t-SNE')
     plt.show()
-
-def save_checkpoint(model, model_name, filename):
-    
-    checkpoint = torch.load(filename)
-    model.save_state_dict(checkpoint[model_name])
-    print('Model Saved')
-
-def load_checkpoint(model, model_name, filename):
-
-    checkpoint = torch.load(filename)
-    model.load_state_dict(checkpoint[model_name])
 
 
 

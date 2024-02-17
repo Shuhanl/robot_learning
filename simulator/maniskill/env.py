@@ -8,7 +8,7 @@ from sapien.core import Pose
 
 from mani_skill2.agents.base_agent import BaseAgent
 from mani_skill2.agents.robots.panda import Panda
-from environments.robot import FlexivRobot
+from .robot import FlexivRobot
 from mani_skill2.envs.sapien_env import BaseEnv
 from mani_skill2.sensors.camera import CameraConfig
 from mani_skill2.utils.sapien_utils import (

@@ -111,7 +111,7 @@ class PlanProposal(nn.Module):
         self.epsilon=1e-4
 
         # Encoder Layers
-        self.in_features = params.vision_dim + params.proprioception_dim
+        self.in_features = 2*params.vision_dim + params.proprioception_dim
 
         self.fc1 = nn.Linear(self.in_features, self.layer_size)
         self.fc2 = nn.Linear(self.layer_size, self.layer_size)
@@ -123,10 +123,11 @@ class PlanProposal(nn.Module):
         dist = Normal(loc=mu, scale=sigma)
         return dist
 
-    def forward(self, x):
+    def forward(self, vision_embeded, proprioception, goal_embeded):
         """
         x: (bs, input_size) -> input_size: goal (vision only) + current (visuo-proprio)
         """
+        x = torch.cat([vision_embeded, proprioception, goal_embeded], dim=-1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
@@ -141,7 +142,7 @@ class PlanProposal(nn.Module):
 class Actor(nn.Module):
   def __init__(self, layer_size=1024, epsilon=1e-4, 
                 num_distribs=None, qbits=None, return_state=False, 
-                discrete=False, disc_embed_size=64):
+                discrete=False):
     super(Actor, self).__init__()
     self.return_state = return_state
     self.discrete = discrete
@@ -149,12 +150,7 @@ class Actor(nn.Module):
     self.epsilon = epsilon
     self.qbits = qbits
 
-    self.disc_embed = nn.Sequential(
-            nn.Linear(params.latent_dim, disc_embed_size),
-            nn.ReLU()
-        )
-
-    self.lstm1 = nn.LSTM(input_size=params.vision_embedding_dim + params.latent_dim + params.vision_embedding_dim,
+    self.lstm1 = nn.LSTM(input_size=2*params.vision_embedding_dim + params.latent_dim + params.proprioception_dim,
                           hidden_size=layer_size, batch_first=True)
     self.lstm2 = nn.LSTM(input_size=layer_size, hidden_size=layer_size, batch_first=True)
 
@@ -192,10 +188,9 @@ class Actor(nn.Module):
 
       return mixture_dist
   
-  def forward(self, o, z, g):
+  def forward(self, vision_embeded, proprioception, latent, goal_embeded):
 
-    z = self.disc_embed(z)
-    x = torch.cat([o, z, g], dim=-1)
+    x = torch.cat([vision_embeded, proprioception, latent, goal_embeded], dim=-1)
 
     x = self.lstm1(x)
     x = self.lstm2(x)

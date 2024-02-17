@@ -1,4 +1,3 @@
-
 import random
 import numpy as np
 from typing import Dict, List
@@ -22,15 +21,14 @@ class ReplayBuffer:
         self.max_size = params.memory_size
         self.ptr, self.size = 0, 0
 
-    def store(self, obs: np.ndarray, action: np.ndarray, reward: np.ndarray, next_obs: np.ndarray, done: np.ndarray):
-        vision, pos, quat = obs['frontview_image'], obs['robot0_eef_pos'], obs['robot0_eef_quat']
-        next_vision, next_pos, next_quat = next_obs['frontview_image'], next_obs['robot0_eef_pos'], next_obs['robot0_eef_quat']
-
+    def store(self, vision: np.ndarray, proprioception: np.ndarray, action: np.ndarray, 
+              reward: np.ndarray, next_vision: np.ndarray, next_proprioception: np.ndarray, done: np.ndarray):
+        """Store experience to the buffer."""
         self.vision_buf[self.ptr] = vision
-        self.proprioception_buf = np.concatenate([pos, quat], axis=-1)
+        self.proprioception_buf[self.ptr] = proprioception
 
         self.next_vision_buf[self.ptr] = next_vision
-        self.next_proprioception_buf = np.concatenate([next_pos, next_quat], axis=-1)
+        self.next_proprioception_buf[self.ptr] = next_proprioception
         
         self.action_buf[self.ptr] = action
         self.reward_buf[self.ptr] = reward
@@ -90,15 +88,18 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         
     def store(
         self, 
-        obs: np.ndarray, 
-        act: int, 
-        rew: float, 
-        next_obs: np.ndarray, 
-        done: bool
+        vision: np.ndarray, 
+        proprioception: np.ndarray, 
+        action: np.ndarray, 
+        reward: np.ndarray, 
+        next_vision: np.ndarray, 
+        next_proprioception: np.ndarray, 
+        done: np.ndarray
     ):
         """Store experience and priority."""
-        super().store(obs, act, rew, next_obs, done)
-        
+        super().store(vision, proprioception, action, 
+              reward, next_vision, next_proprioception, done)
+
         self.sum_tree[self.tree_ptr] = self.max_priority ** self.alpha
         self.min_tree[self.tree_ptr] = self.max_priority ** self.alpha
         self.tree_ptr = (self.tree_ptr + 1) % self.max_size
