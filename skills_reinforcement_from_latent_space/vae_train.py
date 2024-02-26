@@ -17,7 +17,7 @@ class VAETrainer():
     
     def train_step(self, images, proprioception):
         dist = self.vae_model.encode(images, proprioception)
-        latent = dist.resample()
+        latent = dist.sample()
         image_decoded, proprioception_decoded = self.vae_model.decode(latent)
         reconstruction_loss = F.mse_loss(image_decoded, images) + F.mse_loss(proprioception_decoded, proprioception)
         kl_loss = torch.mean(-0.5 * torch.sum(1 + dist.scale**2 - dist.loc**2 - torch.exp(dist.scale**2), dim=1), dim=0)
@@ -35,7 +35,7 @@ class VAETrainer():
         latent_samples = []
         for i in range(self.visualize_batch):
             dist = self.vae_model.encode(images[i], proprioception[i])
-            latent = dist.resample()
+            latent = dist.sample()
             latent_samples.append(latent)
         
         latent_samples = torch.cat(latent_samples, dim=0)
