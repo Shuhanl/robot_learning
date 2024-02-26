@@ -1,6 +1,4 @@
-import copy
 import torch
-import numpy as np
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
@@ -18,8 +16,6 @@ class AgentTrainer():
     self.action_dim = params.action_dim
     self.sequence_length = params.sequence_length
     self.grad_norm_clipping = params.grad_norm_clipping
-
-
 
     print(self.device)
 
@@ -39,6 +35,7 @@ class AgentTrainer():
 
     self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
     self.noise = OrnsteinUhlenbeckProcess(size=self.action_dim)
+    self.mse_loss = torch.nn.MSELoss()
     self.tau = tau
 
     # Wrap your models with DataParallel
@@ -72,11 +69,24 @@ class AgentTrainer():
 
     proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
     proposal_latent = proposal_dist.sample()
-    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded).sample()
 
     if not greedy:
-        action += torch.tensor(self.noise.sample(),dtype=torch.float).cuda()
-    return np.clip(action.detach().cpu().numpy(),-1.0,1.0)
+        action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
+    return action
+  
+  def get_next_action(self, goal, vision, proprioception, greedy=False):
+
+    goal_embeded = self.vision_network(goal)
+    vision_embeded = self.vision_network(vision)
+
+    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
+    proposal_latent = proposal_dist.sample()
+    next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded).sample()
+
+    if not greedy:
+        next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
+    return next_action
   
   def pre_train(self, actions_label, video, proprioception):
 
@@ -84,7 +94,7 @@ class AgentTrainer():
     video = torch.FloatTensor(video).to(self.device)
     proprioception = torch.FloatTensor(proprioception).to(self.device)
 
-    video_embeded = torch.stack([self.vision_network(video[:, i, :]) for i in range(self.sequence_length)], dim=1)
+    video_embeded = torch.stack([self.vision_network(video[:, i, :, :]) for i in range(self.sequence_length)], dim=1)
     goal_embeded = video_embeded[:, -1, :]
     vision_embeded = video_embeded[:, 0, :]
 
@@ -128,16 +138,20 @@ class AgentTrainer():
 
     return loss.item()
   
-  @torch.no_grad()
-  def td_target(self, goal, reward, vision, next_vision, next_proprioception, done):
+  def _td_target(self, goal, vision, next_vision, proprioception, next_proprioception, action, reward, done):
 
-    next_action = self.get_action(goal, vision)
+    vision_embeded = self.vision_network(vision)
+    current_q = self.critic(vision_embeded, proprioception, action)
 
+    next_action = self.get_next_action(goal, vision, proprioception, greedy=True)
     next_vision_embeded = self.vision_network(next_vision)
     next_q = self.target_critic(next_vision_embeded, next_proprioception, next_action)
-    target = reward.unsqueeze(1) + self.gamma * next_q*(1.-done.unsqueeze(1))
+    target_q = reward.unsqueeze(1) + self.gamma * next_q*(1.-done.unsqueeze(1))
 
-    return target.float()
+    critic_loss = self.mse_loss(current_q, target_q)
+    td_errors = torch.abs((target_q - current_q))          # Calculate the TD Errors
+
+    return td_errors, critic_loss
 
   def init_buffer(self, vision, proprioception, action, 
               reward, next_vision, next_proprioception, done):
@@ -147,34 +161,43 @@ class AgentTrainer():
 
   def fine_tune(self, goal):
 
-    vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = self.pri_buffer.sample_batch()
-   
-    target_q = self.td_target(goal, reward, vision, next_vision, next_proprioception, done)
+    buffer = self.pri_buffer.sample_batch()
+    vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = buffer['vision'], \
+      buffer['proprioception'], buffer['next_vision'], buffer['next_proprioception'], buffer['action'], buffer['reward'], \
+        buffer['done'], buffer['weights'], buffer['indices']
 
-    vision_embeded = self.vision_network(vision)
-    current_q = self.critic(vision_embeded, proprioception, action)
+    vision = torch.FloatTensor(vision).to(self.device)
+    proprioception = torch.FloatTensor(proprioception).to(self.device)
+    next_vision = torch.FloatTensor(next_vision).to(self.device)
+    next_proprioception = torch.FloatTensor(next_proprioception).to(self.device)
+    action = torch.FloatTensor(action).to(self.device)
+    reward = torch.FloatTensor(reward).to(self.device)
+    done = torch.FloatTensor(done).to(self.device)
+    goal = goal.repeat(vision.shape[0], 1, 1, 1)
 
-    critic_loss = torch.nn.MSELoss(current_q, target_q)
+    td_errors, critic_loss = self._td_target(goal, vision, next_vision, proprioception, next_proprioception, action, reward, done)
+
     """ Update priorities based on TD errors """
-    td_errors = (target_q - current_q).t()          # Calculate the TD Errors
-
-    self.pri_buffer.update_priorities(indices, td_errors.data.detach().cpu().numpy())
-
-    action = self.get_action(goal, vision, greedy=False)
-    pr = -self.critic(vision_embeded, proprioception, action).mean()
-    pg = (action.pow(2)).mean()
-    actor_loss = pr + pg*1e-3
-
+    self.pri_buffer.update_priorities(indices, td_errors.detach().cpu().numpy())
+      
+    """ Update critic """
     self.critic_optimizer.zero_grad()
     critic_loss.backward()
     clip_grad_norm_(self.critic.parameters(), max_norm=self.grad_norm_clipping)
     self.critic_optimizer.step()
 
+    vision_embeded = self.vision_network(vision)
+    pr = -self.critic(vision_embeded, proprioception, action).mean()
+    pg = (action.pow(2)).mean()
+    actor_loss = pr + pg*1e-3
+
+    """ Update actor """
     self.actor_optimizer.zero_grad()
     clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
     actor_loss.backward()
     self.actor_optimizer.step()
   
+    """ Soft update target networks """
     for target_param, param in zip(self.target_actor.parameters(), self.actor.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
@@ -201,9 +224,9 @@ class AgentTrainer():
   def load_checkpoint(self, filename):
       checkpoint = torch.load(filename)
 
-      self.vision_network._load_from_state_dict(checkpoint['vision_network_state_dict'])
-      self.plan_recognition._load_from_state_dict(checkpoint['plan_recognition_state_dict'])
-      self.plan_proposal._load_from_state_dict(checkpoint['plan_proposal_state_dict'])
+      self.vision_network.load_state_dict(checkpoint['vision_network_state_dict'])
+      self.plan_recognition.load_state_dict(checkpoint['plan_recognition_state_dict'])
+      self.plan_proposal.load_state_dict(checkpoint['plan_proposal_state_dict'])
 
       self.actor.load_state_dict(checkpoint['actor_state_dict'])
       self.target_actor.load_state_dict(checkpoint['target_actor_state_dict'])

@@ -214,8 +214,7 @@ class Critic(nn.Module):
         self.fc1 = nn.Linear(self.in_features, layer_size)
         self.fc2 = nn.Linear(layer_size, layer_size)
         self.fc3 = nn.Linear(layer_size, layer_size)
-        self.fc4 = nn.Linear(layer_size, layer_size)
-        self.fc5 = nn.Linear(layer_size, 1)
+        self.fc4 = nn.Linear(layer_size, 1)
 
     def forward(self, vision_embed, proprioception, action):
 
