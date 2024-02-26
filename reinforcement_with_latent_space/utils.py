@@ -106,7 +106,7 @@ def convert_demonstration(data_bacth):
 
     observation, actions = data_bacth
     rgb = observation["rgbd"][:, 0:3]
-    proprioception = observation["state"][:, 22:30]
+    proprioception = observation["state"][:, 22:29]
     video = rgb
 
     # Add batch dimension

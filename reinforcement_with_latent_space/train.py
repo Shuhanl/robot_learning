@@ -1,6 +1,4 @@
-import copy
 import torch
-import numpy as np
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
@@ -37,6 +35,7 @@ class AgentTrainer():
 
     self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
     self.noise = OrnsteinUhlenbeckProcess(size=self.action_dim)
+    self.mse_loss = torch.nn.MSELoss()
     self.tau = tau
 
     # Wrap your models with DataParallel
@@ -76,7 +75,7 @@ class AgentTrainer():
         action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
     return action
   
-  def get_next_action(self, goal, vision, proprioception):
+  def get_next_action(self, goal, vision, proprioception, greedy=False):
 
     goal_embeded = self.vision_network(goal)
     vision_embeded = self.vision_network(vision)
@@ -85,6 +84,8 @@ class AgentTrainer():
     proposal_latent = proposal_dist.sample()
     next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded).sample()
 
+    if not greedy:
+        next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
     return next_action
   
   def pre_train(self, actions_label, video, proprioception):
@@ -137,18 +138,18 @@ class AgentTrainer():
 
     return loss.item()
   
-  @torch.no_grad()
   def _td_target(self, goal, vision, next_vision, proprioception, next_proprioception, action, reward, done):
 
     vision_embeded = self.vision_network(vision)
     current_q = self.critic(vision_embeded, proprioception, action)
 
-    next_action = self.get_next_action(goal, vision, greedy=True)
+    next_action = self.get_next_action(goal, vision, proprioception, greedy=True)
     next_vision_embeded = self.vision_network(next_vision)
     next_q = self.target_critic(next_vision_embeded, next_proprioception, next_action)
     target_q = reward.unsqueeze(1) + self.gamma * next_q*(1.-done.unsqueeze(1))
-    critic_loss = torch.nn.MSELoss(current_q, target_q)
-    td_errors = (target_q - current_q).t()          # Calculate the TD Errors
+
+    critic_loss = self.mse_loss(current_q, target_q)
+    td_errors = torch.abs((target_q - current_q))          # Calculate the TD Errors
 
     return td_errors, critic_loss
 
@@ -160,12 +161,24 @@ class AgentTrainer():
 
   def fine_tune(self, goal):
 
-    vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = self.pri_buffer.sample_batch()
-       
+    buffer = self.pri_buffer.sample_batch()
+    vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = buffer['vision'], \
+      buffer['proprioception'], buffer['next_vision'], buffer['next_proprioception'], buffer['action'], buffer['reward'], \
+        buffer['done'], buffer['weights'], buffer['indices']
+
+    vision = torch.FloatTensor(vision).to(self.device)
+    proprioception = torch.FloatTensor(proprioception).to(self.device)
+    next_vision = torch.FloatTensor(next_vision).to(self.device)
+    next_proprioception = torch.FloatTensor(next_proprioception).to(self.device)
+    action = torch.FloatTensor(action).to(self.device)
+    reward = torch.FloatTensor(reward).to(self.device)
+    done = torch.FloatTensor(done).to(self.device)
+    goal = goal.repeat(vision.shape[0], 1, 1, 1)
+
     td_errors, critic_loss = self._td_target(goal, vision, next_vision, proprioception, next_proprioception, action, reward, done)
 
     """ Update priorities based on TD errors """
-    self.pri_buffer.update_priorities(indices, td_errors.data.detach().cpu().numpy())
+    self.pri_buffer.update_priorities(indices, td_errors.detach().cpu().numpy())
       
     """ Update critic """
     self.critic_optimizer.zero_grad()

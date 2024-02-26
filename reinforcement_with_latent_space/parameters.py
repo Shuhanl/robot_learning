@@ -1,8 +1,8 @@
 import torch
 
 # Data parameters
-vision_dim = (3, 299, 299)
-proprioception_dim = 8
+vision_dim = (3, 128, 128)
+proprioception_dim = 7
 action_dim = 7
 num_distribs = 10
 sequence_length = 100
