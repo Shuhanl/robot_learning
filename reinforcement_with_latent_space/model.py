@@ -88,8 +88,8 @@ class PlanRecognition(nn.Module):
         # LSTM Layers
         x, _ = self.lstm1(x)
         x, _ = self.lstm2(x)
-
         # Latent variable
+        x = x[:, -1, :]  # Take the last element of the sequence
         mu = self.mu(x)
         sigma = F.softplus(self.sigma(x+self.epsilon))
         dist = self.latent_normal(mu, sigma)

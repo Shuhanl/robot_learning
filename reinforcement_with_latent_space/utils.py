@@ -1,6 +1,5 @@
 import torch
 import torch.distributions.kl as kl
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import h5py
@@ -40,9 +39,6 @@ class ManiSkill2Dataset(Dataset):
             self.obs_rgbd.append(obs['rgbd'][:-1])
             self.obs_state.append(obs['state'][:-1])
             self.actions.append(trajectory["actions"])
-        self.obs_rgbd = np.vstack(self.obs_rgbd)
-        self.obs_state = np.vstack(self.obs_state)
-        self.actions = np.vstack(self.actions)
 
     # loads h5 data into memory for faster access
     def load_h5_data(self, data):
@@ -95,31 +91,26 @@ class ManiSkill2Dataset(Dataset):
 
     def __getitem__(self, idx):
         action = torch.from_numpy(self.actions[idx]).float()
+
         rgbd = self.obs_rgbd[idx]
         rgbd = self.rescale_rgbd(rgbd)
-        # permute data so that channels are the first dimension as PyTorch expects this
-        rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
+        rgbd = torch.from_numpy(rgbd).float().permute(0, 3, 1, 2)     # permute data so that channels are the first dimension as PyTorch expects this
+
         state = torch.from_numpy(self.obs_state[idx]).float()
+
         return dict(rgbd=rgbd, state=state), action
     
 def convert_demonstration(data_bacth):
 
     observation, actions = data_bacth
-    rgb = observation["rgbd"][:, 0:3]
-    proprioception = observation["state"][:, 22:29]
-    video = rgb
+    video = observation["rgbd"][:, :, 0:3, :, :]
+    proprioception = observation["state"][:, :, 22:29]
 
-    # Add batch dimension
-    proprioception = proprioception.unsqueeze(0)
-    video = video.unsqueeze(0)
     return actions, video, proprioception
 
-def compute_loss(labels, predictions, seq_lens):
-    # Sum over the time dimension and divide by sequence lengths
-    nll = -predictions.log_prob(labels).sum(dim=0)
-    per_sequence_loss = nll / seq_lens
-    per_sequence_loss = per_sequence_loss.sum()
-    return per_sequence_loss
+def compute_loss(labels, predictions):
+    nll = -predictions.log_prob(labels).mean()
+    return nll
 
 def compute_regularisation_loss(recognition, proposal):
     # Reverse KL(enc|plan): we want recognition to map to proposal 

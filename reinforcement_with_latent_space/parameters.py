@@ -5,13 +5,12 @@ vision_dim = (3, 128, 128)
 proprioception_dim = 7
 action_dim = 7
 num_distribs = 10
-sequence_length = 100
+batch_size = 2
 
 # Network parameters
 vision_embedding_dim = 64
 latent_dim = 256
 memory_size = int(1e6)
-batch_size=1024
 qbits = 8
 
 # Training hyperparameters

@@ -14,8 +14,9 @@ class AgentTrainer():
     self.lr = params.lr
     self.device = params.device
     self.action_dim = params.action_dim
-    self.sequence_length = params.sequence_length
+    self.batch_size = params.batch_size
     self.grad_norm_clipping = params.grad_norm_clipping
+    self.goal = None
 
     print(self.device)
 
@@ -62,9 +63,13 @@ class AgentTrainer():
       self.target_critic = self.target_critic.to(self.device)
 
 
-  def get_action(self, goal, vision, proprioception, greedy=False):
+  def set_goal(self, goal):
+    self.goal = torch.FloatTensor(goal).to(self.device)
+    self.goal = self.goal.unsqueeze(0)
 
-    goal_embeded = self.vision_network(goal)
+  def get_action(self, vision, proprioception, greedy=False):
+
+    goal_embeded = self.vision_network(self.goal)
     vision_embeded = self.vision_network(vision)
 
     proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
@@ -75,7 +80,7 @@ class AgentTrainer():
         action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
     return action
   
-  def get_next_action(self, goal, vision, proprioception, greedy=False):
+  def _get_next_action(self, goal, vision, proprioception, greedy=False):
 
     goal_embeded = self.vision_network(goal)
     vision_embeded = self.vision_network(vision)
@@ -88,33 +93,39 @@ class AgentTrainer():
         next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
     return next_action
   
-  def pre_train(self, actions_label, video, proprioception):
+  def pre_train(self, action_labels, video, proprioceptions):
 
-    actions_label = torch.FloatTensor(actions_label).to(self.device)
+    action_labels = torch.FloatTensor(action_labels).to(self.device)
     video = torch.FloatTensor(video).to(self.device)
-    proprioception = torch.FloatTensor(proprioception).to(self.device)
+    proprioceptions = torch.FloatTensor(proprioceptions).to(self.device)
 
-    video_embeded = torch.stack([self.vision_network(video[:, i, :, :]) for i in range(self.sequence_length)], dim=1)
+    sequence_length = video.shape[1]
+    video_embeded = torch.stack([self.vision_network(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
     goal_embeded = video_embeded[:, -1, :]
-    vision_embeded = video_embeded[:, 0, :]
 
     # Combine CNN output with proprioception data
-    combined = torch.cat([video_embeded, proprioception], dim=-1)
-  
+    combined = torch.cat([video_embeded, proprioceptions], dim=-1)
     recognition_dist = self.plan_recognition(combined)
 
-    proposal_dist = self.plan_proposal(vision_embeded, proprioception[:, 0, :], goal_embeded)
+    # Compute the loss for a batch sequence of data
+    kl_loss, normal_kl_loss, recon_loss = 0, 0, 0
+    for i in range(sequence_length):
+      vision_embeded = video_embeded[:, i, :]
+      proprioception = proprioceptions[:, i, :]
+      action_label = action_labels[:, i, :]
+      proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
 
-    kl_loss = compute_regularisation_loss(recognition_dist, proposal_dist)
-    normal_kl_loss = torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - 
+      kl_loss += compute_regularisation_loss(recognition_dist, proposal_dist)
+      normal_kl_loss += torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - 
                                                  proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
-    proposal_latent = proposal_dist.sample()
-    action_prob = self.actor(vision_embeded, proprioception[:, 0, :], proposal_latent, goal_embeded)
+      proposal_latent = proposal_dist.sample()
+      action_prob = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
-    recon_loss = compute_loss(actions_label, action_prob, self.sequence_length)
+      recon_loss += compute_loss(action_label, action_prob)
 
-    loss = kl_loss + normal_kl_loss + recon_loss
+    # Compute the batch loss
+    loss = kl_loss + normal_kl_loss + recon_loss / sequence_length
 
     # Assuming the loss applies to all model components and they're all connected in the computational graph.
     self.vision_network.zero_grad()
@@ -143,7 +154,7 @@ class AgentTrainer():
     vision_embeded = self.vision_network(vision)
     current_q = self.critic(vision_embeded, proprioception, action)
 
-    next_action = self.get_next_action(goal, vision, proprioception, greedy=True)
+    next_action = self._get_next_action(goal, vision, proprioception, greedy=True)
     next_vision_embeded = self.vision_network(next_vision)
     next_q = self.target_critic(next_vision_embeded, next_proprioception, next_action)
     target_q = reward.unsqueeze(1) + self.gamma * next_q*(1.-done.unsqueeze(1))
@@ -159,7 +170,7 @@ class AgentTrainer():
     self.pri_buffer.store(vision, proprioception, action, reward, next_vision, next_proprioception, done)
 
 
-  def fine_tune(self, goal):
+  def fine_tune(self):
 
     buffer = self.pri_buffer.sample_batch()
     vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = buffer['vision'], \
@@ -173,7 +184,7 @@ class AgentTrainer():
     action = torch.FloatTensor(action).to(self.device)
     reward = torch.FloatTensor(reward).to(self.device)
     done = torch.FloatTensor(done).to(self.device)
-    goal = goal.repeat(vision.shape[0], 1, 1, 1)
+    goal = self.goal.repeat(vision.shape[0], 1, 1, 1)
 
     td_errors, critic_loss = self._td_target(goal, vision, next_vision, proprioception, next_proprioception, action, reward, done)
 
@@ -214,7 +225,6 @@ class AgentTrainer():
         'target_actor_state_dict': self.target_actor.state_dict(),
         'critic_state_dict': self.critic.state_dict(),
         'target_critic_state_dict': self.target_critic.state_dict(),
-        # Add any other states you wish to save
     }
     
     # Use torch.save to serialize and save the checkpoint dictionary
