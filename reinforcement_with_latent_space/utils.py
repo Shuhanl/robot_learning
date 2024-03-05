@@ -1,10 +1,10 @@
 import torch
 import torch.distributions.kl as kl
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import h5py
 from mani_skill2.utils.io_utils import load_json
+from mani_skill2.utils.common import flatten_state_dict
 from torch.utils.data import Dataset
 from tqdm.notebook import tqdm
 import numpy as np
@@ -40,9 +40,6 @@ class ManiSkill2Dataset(Dataset):
             self.obs_rgbd.append(obs['rgbd'][:-1])
             self.obs_state.append(obs['state'][:-1])
             self.actions.append(trajectory["actions"])
-        self.obs_rgbd = np.vstack(self.obs_rgbd)
-        self.obs_state = np.vstack(self.obs_state)
-        self.actions = np.vstack(self.actions)
 
     # loads h5 data into memory for faster access
     def load_h5_data(self, data):
@@ -65,8 +62,6 @@ class ManiSkill2Dataset(Dataset):
         rgb2 = image_obs["hand_camera"]["rgb"]
         depth2 = image_obs["hand_camera"]["depth"]
 
-        # we provide a simple tool to flatten dictionaries with state data
-        from mani_skill2.utils.common import flatten_state_dict
         state = np.hstack(
             [
                 flatten_state_dict(observation["agent"]),
@@ -95,36 +90,46 @@ class ManiSkill2Dataset(Dataset):
 
     def __getitem__(self, idx):
         action = torch.from_numpy(self.actions[idx]).float()
+
         rgbd = self.obs_rgbd[idx]
         rgbd = self.rescale_rgbd(rgbd)
-        # permute data so that channels are the first dimension as PyTorch expects this
-        rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
+        rgbd = torch.from_numpy(rgbd).float().permute(0, 3, 1, 2)     # permute data so that channels are the first dimension as PyTorch expects this
+
         state = torch.from_numpy(self.obs_state[idx]).float()
+
         return dict(rgbd=rgbd, state=state), action
     
 def convert_demonstration(data_bacth):
 
     observation, actions = data_bacth
-    rgb = observation["rgbd"][:, 0:3]
-    proprioception = observation["state"][:, 22:29]
-    video = rgb
+    video = observation["rgbd"]
+    proprioception = observation["state"][:, :, 22:29]
 
-    # Add batch dimension
-    proprioception = proprioception.unsqueeze(0)
-    video = video.unsqueeze(0)
     return actions, video, proprioception
 
-def compute_loss(labels, predictions, seq_lens):
-    # Sum over the time dimension and divide by sequence lengths
-    nll = -predictions.log_prob(labels).sum(dim=0)
-    per_sequence_loss = nll / seq_lens
-    per_sequence_loss = per_sequence_loss.sum()
-    return per_sequence_loss
+def convert_observation(observation):
+
+    image_obs = observation["image"]
+    rgb1 = image_obs["base_camera"]["rgb"] / 255.0
+    depth1 = image_obs["base_camera"]["depth"] / (2**10)
+    rgb2 = image_obs["hand_camera"]["rgb"] / 255.0
+    depth2 = image_obs["hand_camera"]["depth"] / (2**10)
+    vision = np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
+    vision = vision.transpose(2, 0, 1)
+    proprioception = observation['extra']['tcp_pose']
+
+    return vision, proprioception
+
+def compute_loss(labels, predictions):
+    nll = torch.sum(-predictions.log_prob(labels), dim=1)  # sum over action space
+    nll = torch.mean(nll, dim=0)   # average over batch
+    return nll
 
 def compute_regularisation_loss(recognition, proposal):
-    # Reverse KL(enc|plan): we want recognition to map to proposal 
-    reg_loss = kl.kl_divergence(recognition, proposal) # + KL(plan, encoding)
-    average_loss = reg_loss.mean()
+    """ Reverse KL(enc|plan): we want recognition to map to proposal """
+    reg_loss = kl.kl_divergence(recognition, proposal) # [batch_size, latent_dim]
+    reg_loss = torch.sum(reg_loss, dim=1) # sum over latent space
+    average_loss = torch.mean(reg_loss, dim=0) # average over batch
     return average_loss
 
 def plot_latent_space(encoder, vision_network, video_batch, proprioception_batch, action_batch):
