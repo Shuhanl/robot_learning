@@ -21,6 +21,3 @@ grad_norm_clipping = 0.5
 beta = 0.01
 tau = 0.01
 num_episodes = 100
-
-
-WINDOW_SIZE = 32

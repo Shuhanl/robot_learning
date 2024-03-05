@@ -40,7 +40,7 @@ class AgentTrainer():
     self.tau = params.tau
     self.beta = params.beta
 
-    # Wrap your models with DataParallel
+    """ Wrap your models with DataParallel """
     if torch.cuda.device_count() > 1:
       print("Using", torch.cuda.device_count(), "GPUs!")
       self.vision_network = torch.nn.DataParallel(self.vision_network)
@@ -113,7 +113,7 @@ class AgentTrainer():
     combined = torch.cat([video_embeded, proprioceptions], dim=-1)
     recognition_dist = self.plan_recognition(combined)
 
-    # Compute the loss for a batch sequence of data
+    """ Compute the loss for batches sequence of data """
     kl_loss, normal_kl_loss, recon_loss = 0, 0, 0
     for i in range(sequence_length):
       vision_embeded = video_embeded[:, i, :]
@@ -127,6 +127,7 @@ class AgentTrainer():
                                                  proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
       proposal_latent = proposal_dist.sample()
+      """ Prepend the goal to let the network attend to it """
       pred_action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
       recon_loss += self.mse_loss(action_label, pred_action)

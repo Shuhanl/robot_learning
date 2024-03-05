@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
-
 import transformers
-
 from trajectory_gpt2 import GPT2Model
 
 

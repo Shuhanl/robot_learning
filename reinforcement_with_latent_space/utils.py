@@ -5,7 +5,6 @@ from sklearn.manifold import TSNE
 import h5py
 from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.common import flatten_state_dict
-import parameters as params
 from torch.utils.data import Dataset
 from tqdm.notebook import tqdm
 import numpy as np
