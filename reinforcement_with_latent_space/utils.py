@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import h5py
 from mani_skill2.utils.io_utils import load_json
+from mani_skill2.utils.common import flatten_state_dict
+import parameters as params
 from torch.utils.data import Dataset
 from tqdm.notebook import tqdm
 import numpy as np
@@ -61,8 +63,6 @@ class ManiSkill2Dataset(Dataset):
         rgb2 = image_obs["hand_camera"]["rgb"]
         depth2 = image_obs["hand_camera"]["depth"]
 
-        # we provide a simple tool to flatten dictionaries with state data
-        from mani_skill2.utils.common import flatten_state_dict
         state = np.hstack(
             [
                 flatten_state_dict(observation["agent"]),
@@ -103,19 +103,34 @@ class ManiSkill2Dataset(Dataset):
 def convert_demonstration(data_bacth):
 
     observation, actions = data_bacth
-    video = observation["rgbd"][:, :, 0:3, :, :]
+    video = observation["rgbd"]
     proprioception = observation["state"][:, :, 22:29]
 
     return actions, video, proprioception
 
+def convert_observation(observation):
+
+    image_obs = observation["image"]
+    rgb1 = image_obs["base_camera"]["rgb"] / 255.0
+    depth1 = image_obs["base_camera"]["depth"] / (2**10)
+    rgb2 = image_obs["hand_camera"]["rgb"] / 255.0
+    depth2 = image_obs["hand_camera"]["depth"] / (2**10)
+    vision = np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
+    vision = vision.transpose(2, 0, 1)
+    proprioception = observation['extra']['tcp_pose']
+
+    return vision, proprioception
+
 def compute_loss(labels, predictions):
-    nll = -predictions.log_prob(labels).mean()
+    nll = torch.sum(-predictions.log_prob(labels), dim=1)  # sum over action space
+    nll = torch.mean(nll, dim=0)   # average over batch
     return nll
 
 def compute_regularisation_loss(recognition, proposal):
-    # Reverse KL(enc|plan): we want recognition to map to proposal 
-    reg_loss = kl.kl_divergence(recognition, proposal) # + KL(plan, encoding)
-    average_loss = reg_loss.mean()
+    """ Reverse KL(enc|plan): we want recognition to map to proposal """
+    reg_loss = kl.kl_divergence(recognition, proposal) # [batch_size, latent_dim]
+    reg_loss = torch.sum(reg_loss, dim=1) # sum over latent space
+    average_loss = torch.mean(reg_loss, dim=0) # average over batch
     return average_loss
 
 def plot_latent_space(encoder, vision_network, video_batch, proprioception_batch, action_batch):

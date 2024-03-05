@@ -2,14 +2,14 @@ import torch
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
-from model import VisionNetwork, PlanRecognition, PlanProposal, Actor, Critic
+from model import VisionNetwork, PlanRecognition, PlanProposal, DirectActor, Critic
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
-from utils import compute_loss, compute_regularisation_loss
+from utils import compute_regularisation_loss
 import parameters as params
   
 class AgentTrainer():
-  def __init__(self, gamma=0.95, tau=0.01,):
+  def __init__(self, gamma=0.95):
     self.gamma = gamma
     self.lr = params.lr
     self.device = params.device
@@ -27,8 +27,8 @@ class AgentTrainer():
     self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
     self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
 
-    self.actor = Actor()
-    self.target_actor = Actor()
+    self.actor = DirectActor()
+    self.target_actor = DirectActor()
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
     self.critic = Critic()
     self.target_critic = Critic()
@@ -37,7 +37,8 @@ class AgentTrainer():
     self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
     self.noise = OrnsteinUhlenbeckProcess(size=self.action_dim)
     self.mse_loss = torch.nn.MSELoss()
-    self.tau = tau
+    self.tau = params.tau
+    self.beta = params.beta
 
     # Wrap your models with DataParallel
     if torch.cuda.device_count() > 1:
@@ -67,27 +68,32 @@ class AgentTrainer():
     self.goal = torch.FloatTensor(goal).to(self.device)
     self.goal = self.goal.unsqueeze(0)
 
-  def get_action(self, vision, proprioception, greedy=False):
+  def get_action(self, vision, proprioception, greedy=True):
+
+    proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(params.device)
+    vision = torch.FloatTensor(vision).unsqueeze(0).to(params.device)
 
     goal_embeded = self.vision_network(self.goal)
     vision_embeded = self.vision_network(vision)
 
     proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
     proposal_latent = proposal_dist.sample()
-    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded).sample()
+    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
     if not greedy:
         action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
-    return action
+
+    action = action.detach().cpu().numpy()
+    return action[0]
   
-  def _get_next_action(self, goal, vision, proprioception, greedy=False):
+  def _get_next_action(self, goal, vision, proprioception, greedy=True):
 
     goal_embeded = self.vision_network(goal)
     vision_embeded = self.vision_network(vision)
 
     proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
     proposal_latent = proposal_dist.sample()
-    next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded).sample()
+    next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
     if not greedy:
         next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
@@ -103,7 +109,7 @@ class AgentTrainer():
     video_embeded = torch.stack([self.vision_network(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
     goal_embeded = video_embeded[:, -1, :]
 
-    # Combine CNN output with proprioception data
+    """ Combine CNN output with proprioception data """
     combined = torch.cat([video_embeded, proprioceptions], dim=-1)
     recognition_dist = self.plan_recognition(combined)
 
@@ -116,16 +122,17 @@ class AgentTrainer():
       proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
 
       kl_loss += compute_regularisation_loss(recognition_dist, proposal_dist)
+      
       normal_kl_loss += torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - 
                                                  proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
       proposal_latent = proposal_dist.sample()
-      action_prob = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+      pred_action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
-      recon_loss += compute_loss(action_label, action_prob)
+      recon_loss += self.mse_loss(action_label, pred_action)
 
     # Compute the batch loss
-    loss = kl_loss + normal_kl_loss + recon_loss / sequence_length
+    loss = self.beta*(kl_loss + normal_kl_loss) + recon_loss / sequence_length
 
     # Assuming the loss applies to all model components and they're all connected in the computational graph.
     self.vision_network.zero_grad()

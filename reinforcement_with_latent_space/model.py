@@ -18,16 +18,26 @@ class VisionNetwork(nn.Module):
         self.out_dim = params.vision_embedding_dim
 
         # Encoder Layers
-        # In PyTorch, normalization is usually done as a preprocessing step, but it can be included in the model
-        self.rescaling = lambda x: x / 255.0  
-        self.conv1 = nn.Conv2d(img_channels, 32, kernel_size=8, stride=4, padding=2)  # 'same' padding in PyTorch needs calculation
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
-        self.flatten = nn.Flatten()
+        self.cnn = nn.Sequential(
+        nn.Conv2d(img_channels, 32, kernel_size=8, stride=4, padding=0),  
+        nn.ReLU(),
+        nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
+        nn.ReLU(),
+        nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+        nn.ReLU()
+        )
 
-        fc_input_size = 64 * 2 
-        self.dense1 = nn.Linear(fc_input_size, 512)
-        self.dense2 = nn.Linear(512, self.out_dim)
+        # to easily figure out the dimensions after flattening, we pass a test tensor
+        test_tensor = torch.zeros(
+            [img_channels, img_height, img_width]
+        )
+        with torch.no_grad():
+            pre_softmax = self.cnn(test_tensor[None])
+            N, C, H, W = pre_softmax.shape
+        
+            self.fc = nn.Sequential(nn.Linear(2*C, 512),
+                                nn.ReLU(),
+                                nn.Linear(512, self.out_dim))
     
     def _spatial_softmax(self, pre_softmax):
         N, C, H, W = pre_softmax.shape
@@ -50,18 +60,13 @@ class VisionNetwork(nn.Module):
         # Compute spatial soft argmax
         # This tensor represents the 'center of mass' for each channel of each feature map in the batch
         spatial_soft_argmax = torch.sum(softmax * image_coords, dim=[2, 3])  # [N, C, 2]
-        return spatial_soft_argmax
+        x = nn.Flatten()(spatial_soft_argmax)  # [N, C, 2] -> [N, 2*C]
+        return x
 
     def forward(self, x):
-        x = self.rescaling(x)
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        pre_softmax = F.relu(self.conv3(x))
+        pre_softmax = self.cnn(x)
         spatial_soft_argmax = self._spatial_softmax(pre_softmax)
-        x = self.flatten(spatial_soft_argmax)
-        x = F.relu(self.dense1(x))
-        x = self.dense2(x)
-
+        x = self.fc(spatial_soft_argmax)
         return x
 
         
@@ -107,11 +112,15 @@ class PlanProposal(nn.Module):
         self.in_features = 2*params.vision_embedding_dim + params.proprioception_dim
         self.latent_dim = params.latent_dim
 
-        self.fc1 = nn.Linear(self.in_features, self.layer_size)
-        self.fc2 = nn.Linear(self.layer_size, self.layer_size)
-        self.fc3 = nn.Linear(self.layer_size, self.layer_size)
-        self.fc4 = nn.Linear(self.layer_size, self.layer_size)
-        self.fc5 = nn.Linear(self.layer_size, self.latent_dim)
+        self.fc = nn.Sequential(nn.Linear(self.in_features, self.layer_size), 
+                                        nn.ReLU(),
+                                        nn.Linear(self.layer_size, self.layer_size),
+                                        nn.ReLU(),
+                                        nn.Linear(self.layer_size, self.layer_size),
+                                        nn.ReLU(),
+                                        nn.Linear(self.layer_size, self.layer_size),
+                                        nn.ReLU(),
+                                        nn.Linear(self.layer_size, self.latent_dim))
 
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
@@ -122,12 +131,8 @@ class PlanProposal(nn.Module):
         x: (bs, input_size) -> input_size: goal (vision only) + current (visuo-proprio)
         """
         x = torch.cat([vision_embeded, proprioception, goal_embeded], dim=-1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = F.relu(self.fc4(x))
-        mu = self.fc5(x)
-        sigma = F.softplus(self.fc5(x+self.epsilon))
+        mu = self.fc(x)
+        sigma = F.softplus(self.fc(x+self.epsilon))
         dist = self.latent_normal(mu, sigma)
 
         return dist
@@ -174,9 +179,9 @@ class LogisticMixture(Distribution):
         log_prob = self.mixture_dist.log_prob(value)
         return log_prob
     
-class Actor(nn.Module):
+class LogisticActor(nn.Module):
   def __init__(self, layer_size=1024, epsilon=1e-4):
-    super(Actor, self).__init__()
+    super(LogisticActor, self).__init__()
     self.epsilon = epsilon
     self.in_dim = 2*params.vision_embedding_dim + params.latent_dim + params.proprioception_dim
     self.action_dim = params.action_dim
@@ -205,24 +210,45 @@ class Actor(nn.Module):
     logistic_mixture = LogisticMixture(weightings, mu, scale, self.qbits)
 
     return logistic_mixture
+    
+class DirectActor(nn.Module):
+    def __init__(
+        self,
+        layer_size=1024
+    ):
+        super().__init__()
+        self.action_dim = params.action_dim
+
+        self.in_dim = 2*params.vision_embedding_dim + params.latent_dim + params.proprioception_dim
+        self.lstm1 = nn.LSTM(input_size=self.in_dim, hidden_size=layer_size, batch_first=True)                    
+        self.lstm2 = nn.LSTM(input_size=layer_size, hidden_size=layer_size, batch_first=True)
+
+        self.fc = nn.Sequential(nn.Linear(layer_size, self.action_dim), nn.Tanh())
+
+    def forward(self, vision_embeded, proprioception, latent, goal_embeded):
+        x = torch.cat([vision_embeded, proprioception, latent, goal_embeded], dim=-1)
+        x, _ = self.lstm1(x)
+        x, _ = self.lstm2(x)
+        action = self.fc(x)
+        return action
 
 class Critic(nn.Module):
     def __init__(self, layer_size=1024):
         super(Critic, self).__init__()
         self.in_features = params.vision_embedding_dim + params.proprioception_dim + params.action_dim
         # Fully Connected Layers
-        self.fc1 = nn.Linear(self.in_features, layer_size)
-        self.fc2 = nn.Linear(layer_size, layer_size)
-        self.fc3 = nn.Linear(layer_size, layer_size)
-        self.fc4 = nn.Linear(layer_size, 1)
+        self.fc = nn.Sequential(nn.Linear(self.in_features, layer_size), 
+                                nn.ReLU(),
+                                nn.Linear(layer_size, layer_size),
+                                nn.ReLU(),
+                                nn.Linear(layer_size, layer_size),
+                                nn.ReLU(),
+                                nn.Linear(layer_size, 1))
 
     def forward(self, vision_embed, proprioception, action):
 
         x = torch.cat([vision_embed, proprioception, action], dim=-1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        q_value = F.relu(self.fc4(x))
+        q_value = F.relu(self.fc(x))
 
         return q_value
     
