@@ -1,14 +1,13 @@
 import torch
 import torch.nn as nn
-
-
 from mamba import MambaModel
+import parameters as params
 
 
 class DecisionMamba(nn.Module):
 
     """
-    This model uses GPT to model (Return_1, state_1, action_1, Return_2, state_2, ...)
+    This model uses Mamba to model (Return_1, state_1, action_1, Return_2, state_2, ...)
     """
 
     def __init__(
@@ -23,8 +22,8 @@ class DecisionMamba(nn.Module):
             **kwargs
     ):
         super().__init__()
-        self.state_dim = state_dim
-        self.act_dim = act_dim
+        self.proprioception_dim = params.proprioception_dim
+        self.action_dim = params.action_dim
         self.max_length = max_length
 
         self.hidden_size = hidden_size
@@ -33,8 +32,8 @@ class DecisionMamba(nn.Module):
 
         self.embed_timestep = nn.Embedding(max_ep_len, hidden_size)
         self.embed_return = torch.nn.Linear(1, hidden_size)
-        self.embed_state = torch.nn.Linear(self.state_dim, hidden_size)
-        self.embed_action = torch.nn.Linear(self.act_dim, hidden_size)
+        self.embed_state = torch.nn.Linear(self.proprioception_dim, hidden_size)
+        self.embed_action = torch.nn.Linear(self.action_dim, hidden_size)
 
         self.embed_ln = nn.LayerNorm(hidden_size)
 

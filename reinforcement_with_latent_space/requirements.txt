@@ -2,4 +2,4 @@ numpy
 pybullet>=3.0.4
 gym==0.17.3
 mani-skill2
-
+tensorboard
