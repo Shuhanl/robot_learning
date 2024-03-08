@@ -70,34 +70,36 @@ class AgentTrainer():
 
   def get_action(self, vision, proprioception, greedy=True):
 
-    proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(params.device)
-    vision = torch.FloatTensor(vision).unsqueeze(0).to(params.device)
+    with torch.no_grad():
+      proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(params.device)
+      vision = torch.FloatTensor(vision).unsqueeze(0).to(params.device)
 
-    goal_embeded = self.vision_network(self.goal)
-    vision_embeded = self.vision_network(vision)
+      goal_embeded = self.vision_network(self.goal)
+      vision_embeded = self.vision_network(vision)
 
-    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
-    proposal_latent = proposal_dist.sample()
-    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+      proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
+      proposal_latent = proposal_dist.sample()
+      action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
-    if not greedy:
-        action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
+      if not greedy:
+          action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
 
-    action = action.detach().cpu().numpy()
-    return action[0]
+      action = action.detach().cpu().numpy()
+      return action[0]
   
   def _get_next_action(self, goal, vision, proprioception, greedy=True):
 
-    goal_embeded = self.vision_network(goal)
-    vision_embeded = self.vision_network(vision)
+    with torch.no_grad():
+      goal_embeded = self.vision_network(goal)
+      vision_embeded = self.vision_network(vision)
 
-    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
-    proposal_latent = proposal_dist.sample()
-    next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+      proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
+      proposal_latent = proposal_dist.sample()
+      next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
-    if not greedy:
-        next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
-    return next_action
+      if not greedy:
+          next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
+      return next_action
   
   def pre_train(self, action_labels, video, proprioceptions):
 
