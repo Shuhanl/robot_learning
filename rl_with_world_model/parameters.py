@@ -11,6 +11,7 @@ vision_embedding_dim = 64
 latent_dim = 256
 memory_size = int(1e6)
 batch_size=1024
+mamba_model_dim = 128
 
 # Training hyperparameters
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
