@@ -1,44 +1,48 @@
-import copy
 import torch
 import numpy as np
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
-from actor_critic_nn import Actor, Critic
+from model import DirectActor, Critic
 from replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
+import parameters as params
 
 class AgentTrainer():
-    def __init__(self, action_shape, robot_state_shape, gamma=0.95,lr=0.001,batch_size=1024,memory_size=int(1e6),tau=0.01,grad_norm_clipping = 0.5):
-        self.action_shape = action_shape
-        self.robot_state_shape = robot_state_shape
-        self.gamma = gamma
-        self.actor = Actor(self.action_shape, robot_state_shape)
-        self.target_actor = copy.deepcopy(self.actor)
-        self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=lr)
-        self.critic = Critic(self.action_shape, robot_state_shape)
-        self.target_critic = copy.deepcopy(self.critic)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=lr)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(self.device)
+    def __init__(self, gamma=0.95):
+      self.gamma = gamma
+      self.lr = params.lr
+      self.device = params.device
+      self.action_dim = params.action_dim
+      self.batch_size = params.batch_size
+      self.grad_norm_clipping = params.grad_norm_clipping
+      self.goal = None
 
-        # Wrap your models with DataParallel
-        if torch.cuda.device_count() > 1:
-          print("Using", torch.cuda.device_count(), "GPUs!")
-          self.actor = torch.nn.DataParallel(self.actor)
-          self.critic = torch.nn.DataParallel(self.critic)
+      print(self.device)
 
-        else:
-          print("Using single GPU")
-          self.actor = self.actor.to(self.device)
-          self.critic = self.critic.to(self.device)
+      self.actor = DirectActor()
+      self.target_actor = DirectActor()
+      self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
+      self.critic = Critic()
+      self.target_critic = Critic()
+      self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=self.lr)
 
-        self.pri_buffer = PrioritizedReplayBuffer(memory_size, alpha=0.6, beta=0.4)
-        self.loss_fn = torch.nn.MSELoss()
-        self.batch_size = batch_size
-        self.is_gpu = torch.cuda.is_available
-        self.noise = OrnsteinUhlenbeckProcess(size=self.action_shape)
-        self.grad_norm_clipping = grad_norm_clipping
-        self.tau = tau
+      self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
+      self.noise = OrnsteinUhlenbeckProcess(size=self.action_dim)
+      self.mse_loss = torch.nn.MSELoss()
+      self.tau = params.tau
+      self.beta = params.beta
+
+      # Wrap your models with DataParallel
+      if torch.cuda.device_count() > 1:
+        print("Using", torch.cuda.device_count(), "GPUs!")
+        self.actor = torch.nn.DataParallel(self.actor)
+        self.critic = torch.nn.DataParallel(self.critic)
+
+      else:
+        print("Using single GPU")
+        self.actor = self.actor.to(self.device)
+        self.critic = self.critic.to(self.device)
+
 
     @torch.no_grad()
     def td_targeti(self, reward, vision, next_vision, robot_state, next_robot_state, done):
