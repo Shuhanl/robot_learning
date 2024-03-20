@@ -4,9 +4,9 @@ import torch
 vision_dim = (8, 128, 128)
 proprioception_dim = 7
 action_dim = 7
-embedding_dim = 64
+latent_dim = 64
 num_distribs = 10
-batch_size = 2
+batch_size = 100
 num_workers = 2
 
 # Network parameters
