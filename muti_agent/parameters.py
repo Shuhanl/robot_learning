@@ -1,19 +1,20 @@
 import torch
 
 # Data parameters
-vision_dim = (8, 128, 128)
-proprioception_dim = 7
-action_dim = 7
+arm_state_dim = 14
+leg_state_dim = 12
+body_state_dim = 6
+
+arm_act_dim = 14
+leg_act_dim = 12
+body_act_dim = 3
+
 latent_dim = 64
 num_distribs = 10
 batch_size = 100
 num_workers = 2
 
 # Network parameters
-vision_embedding_dim = 64
-mamba_state_dim = 256
-memory_size = int(1e6)
-qbits = 8
 
 # Training hyperparameters
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

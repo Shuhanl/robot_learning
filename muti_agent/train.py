@@ -2,10 +2,9 @@ import torch
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
-from model import VisionNetwork, PlanRecognition, PlanProposal, DirectActor, Critic
+from model import Actor, Critic
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
-from utils import compute_regularisation_loss
 import parameters as params
   
 class AgentTrainer():
@@ -20,16 +19,10 @@ class AgentTrainer():
 
     print(self.device)
 
-    self.vision_network = VisionNetwork()
-    self.plan_recognition = PlanRecognition()
-    self.plan_proposal = PlanProposal()
-    self.vision_network_optimizer = optim.Adam(self.vision_network.parameters(), lr=self.lr)
-    self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
-    self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
-
-    self.actor = DirectActor()
-    self.target_actor = DirectActor()
+    self.actor = Actor()
+    self.target_actor = Actor()
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
+
     self.critic = Critic()
     self.target_critic = Critic()
     self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=self.lr)
@@ -37,16 +30,11 @@ class AgentTrainer():
     self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
     self.noise = OrnsteinUhlenbeckProcess(size=self.action_dim)
     self.mse_loss = torch.nn.MSELoss()
-    self.tau = params.tau
     self.beta = params.beta
 
     """ Wrap your models with DataParallel """
     if torch.cuda.device_count() > 1:
       print("Using", torch.cuda.device_count(), "GPUs!")
-      self.vision_network = torch.nn.DataParallel(self.vision_network)
-      self.plan_recognition = torch.nn.DataParallel(self.plan_recognition)
-      self.plan_proposal = torch.nn.DataParallel(self.plan_proposal)
-
       self.actor = torch.nn.DataParallel(self.actor)
       self.critic = torch.nn.DataParallel(self.critic)
       self.target_actor = torch.nn.DataParallel(self.target_actor)
@@ -54,19 +42,11 @@ class AgentTrainer():
 
     else:
       print("Using single GPU")
-      self.vision_network = self.vision_network.to(self.device)
-      self.plan_recognition = self.plan_recognition.to(self.device)
-      self.plan_proposal = self.plan_proposal.to(self.device)
-
       self.actor = self.actor.to(self.device)
       self.critic = self.critic.to(self.device)
       self.target_actor = self.target_actor.to(self.device)
       self.target_critic = self.target_critic.to(self.device)
 
-
-  def set_goal(self, goal):
-    self.goal = torch.FloatTensor(goal).to(self.device)
-    self.goal = self.goal.unsqueeze(0)
 
   def get_action(self, vision, proprioception, greedy=True):
 
@@ -100,64 +80,6 @@ class AgentTrainer():
       if not greedy:
           next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
       return next_action
-  
-  def pre_train(self, action_labels, video, proprioceptions):
-
-    action_labels = torch.FloatTensor(action_labels).to(self.device)
-    video = torch.FloatTensor(video).to(self.device)
-    proprioceptions = torch.FloatTensor(proprioceptions).to(self.device)
-
-    sequence_length = video.shape[1]
-    video_embeded = torch.stack([self.vision_network(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
-    goal_embeded = video_embeded[:, -1, :]
-
-    """ Combine CNN output with proprioception data """
-    combined = torch.cat([video_embeded, proprioceptions], dim=-1)
-    recognition_dist = self.plan_recognition(combined)
-
-    """ Compute the loss for batches sequence of data """
-    kl_loss, normal_kl_loss, recon_loss = 0, 0, 0
-    for i in range(sequence_length):
-      vision_embeded = video_embeded[:, i, :]
-      proprioception = proprioceptions[:, i, :]
-      action_label = action_labels[:, i, :]
-      proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
-
-      kl_loss += compute_regularisation_loss(recognition_dist, proposal_dist)
-      
-      normal_kl_loss += torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - 
-                                                 proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
-
-      proposal_latent = proposal_dist.sample()
-      """ Prepend the goal to let the network attend to it """
-      pred_action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
-
-      recon_loss += self.mse_loss(action_label, pred_action)
-
-    # Compute the batch loss
-    loss = self.beta*(kl_loss + normal_kl_loss) + recon_loss / sequence_length
-
-    # Assuming the loss applies to all model components and they're all connected in the computational graph.
-    self.vision_network.zero_grad()
-    self.plan_recognition.zero_grad()
-    self.plan_proposal.zero_grad()
-    self.actor.zero_grad()
-
-    # Only need to call backward once if all parts are connected and contribute to the loss.
-    loss.backward()
-
-    clip_grad_norm_(self.vision_network.parameters(), max_norm=self.grad_norm_clipping)
-    clip_grad_norm_(self.plan_recognition.parameters(), max_norm=self.grad_norm_clipping)
-    clip_grad_norm_(self.plan_proposal.parameters(), max_norm=self.grad_norm_clipping)
-    clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
-
-    # Then step each optimizer
-    self.vision_network_optimizer.step()
-    self.plan_recognition_optimizer.step()
-    self.plan_proposal_optimizer.step()
-    self.actor_optimizer.step()
-
-    return loss.item()
   
   def _td_target(self, goal, vision, next_vision, proprioception, next_proprioception, action, reward, done):
 
@@ -217,20 +139,19 @@ class AgentTrainer():
     clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
     actor_loss.backward()
     self.actor_optimizer.step()
-  
+
     """ Soft update target networks """
     for target_param, param in zip(self.target_actor.parameters(), self.actor.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
+
   def save_checkpoint(self, filename):
       
     # Create a checkpoint dictionary containing the state dictionaries of all components
     checkpoint = {
         'vision_network_state_dict': self.vision_network.state_dict(),
-        'plan_recognition_state_dict': self.plan_recognition.state_dict(),
-        'plan_proposal_state_dict': self.plan_proposal.state_dict(),
         'actor_state_dict': self.actor.state_dict(),
         'target_actor_state_dict': self.target_actor.state_dict(),
         'critic_state_dict': self.critic.state_dict(),
@@ -245,8 +166,6 @@ class AgentTrainer():
       checkpoint = torch.load(filename)
 
       self.vision_network.load_state_dict(checkpoint['vision_network_state_dict'])
-      self.plan_recognition.load_state_dict(checkpoint['plan_recognition_state_dict'])
-      self.plan_proposal.load_state_dict(checkpoint['plan_proposal_state_dict'])
 
       self.actor.load_state_dict(checkpoint['actor_state_dict'])
       self.target_actor.load_state_dict(checkpoint['target_actor_state_dict'])

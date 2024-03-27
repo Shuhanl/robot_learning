@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
-from model import VisionNetwork, PlanRecognition, PlanProposal, DirectActor, Critic
+from model import VisionNetwork, PlanRecognitionTransformer, PlanProposal, DirectActorTransformer, Critic
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
 from utils import compute_regularisation_loss
@@ -21,14 +21,14 @@ class AgentTrainer():
     print(self.device)
 
     self.vision_network = VisionNetwork()
-    self.plan_recognition = PlanRecognition()
+    self.plan_recognition = PlanRecognitionTransformer()
     self.plan_proposal = PlanProposal()
     self.vision_network_optimizer = optim.Adam(self.vision_network.parameters(), lr=self.lr)
     self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
     self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
 
-    self.actor = DirectActor()
-    self.target_actor = DirectActor()
+    self.actor = DirectActorTransformer()
+    self.target_actor = DirectActorTransformer()
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
     self.critic = Critic()
     self.target_critic = Critic()
@@ -130,6 +130,7 @@ class AgentTrainer():
 
       proposal_latent = proposal_dist.sample()
       """ Prepend the goal to let the network attend to it """
+      # pred_action = torch.zeros_like(action_label)
       pred_action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
       recon_loss += self.mse_loss(action_label, pred_action)
@@ -223,6 +224,8 @@ class AgentTrainer():
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+  
+    return critic_loss.item(), actor_loss.item()
 
   def save_checkpoint(self, filename):
       
