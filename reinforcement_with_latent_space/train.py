@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
-from model import VisionNetwork, PlanRecognition, PlanProposal, DirectActor, Critic
+from model import VisionNetwork, PlanRecognitionTransformer, PlanProposal, DirectActorTransformer, Critic
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 from noise import OrnsteinUhlenbeckProcess
 from utils import compute_regularisation_loss
@@ -21,14 +21,14 @@ class AgentTrainer():
     print(self.device)
 
     self.vision_network = VisionNetwork()
-    self.plan_recognition = PlanRecognition()
+    self.plan_recognition = PlanRecognitionTransformer()
     self.plan_proposal = PlanProposal()
     self.vision_network_optimizer = optim.Adam(self.vision_network.parameters(), lr=self.lr)
     self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
     self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
 
-    self.actor = DirectActor()
-    self.target_actor = DirectActor()
+    self.actor = DirectActorTransformer()
+    self.target_actor = DirectActorTransformer()
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
     self.critic = Critic()
     self.target_critic = Critic()
@@ -70,34 +70,36 @@ class AgentTrainer():
 
   def get_action(self, vision, proprioception, greedy=True):
 
-    proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(params.device)
-    vision = torch.FloatTensor(vision).unsqueeze(0).to(params.device)
+    with torch.no_grad():
+      proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(params.device)
+      vision = torch.FloatTensor(vision).unsqueeze(0).to(params.device)
 
-    goal_embeded = self.vision_network(self.goal)
-    vision_embeded = self.vision_network(vision)
+      goal_embeded = self.vision_network(self.goal)
+      vision_embeded = self.vision_network(vision)
 
-    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
-    proposal_latent = proposal_dist.sample()
-    action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+      proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
+      proposal_latent = proposal_dist.sample()
+      action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
-    if not greedy:
-        action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
+      if not greedy:
+          action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
 
-    action = action.detach().cpu().numpy()
-    return action[0]
+      action = action.detach().cpu().numpy()
+      return action[0]
   
   def _get_next_action(self, goal, vision, proprioception, greedy=True):
 
-    goal_embeded = self.vision_network(goal)
-    vision_embeded = self.vision_network(vision)
+    with torch.no_grad():
+      goal_embeded = self.vision_network(goal)
+      vision_embeded = self.vision_network(vision)
 
-    proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
-    proposal_latent = proposal_dist.sample()
-    next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+      proposal_dist = self.plan_proposal(vision_embeded, proprioception, goal_embeded)
+      proposal_latent = proposal_dist.sample()
+      next_action = self.target_actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
-    if not greedy:
-        next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
-    return next_action
+      if not greedy:
+          next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
+      return next_action
   
   def pre_train(self, action_labels, video, proprioceptions):
 
@@ -128,6 +130,7 @@ class AgentTrainer():
 
       proposal_latent = proposal_dist.sample()
       """ Prepend the goal to let the network attend to it """
+      # pred_action = torch.zeros_like(action_label)
       pred_action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
 
       recon_loss += self.mse_loss(action_label, pred_action)
@@ -221,6 +224,8 @@ class AgentTrainer():
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
       target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+  
+    return critic_loss.item(), actor_loss.item()
 
   def save_checkpoint(self, filename):
       

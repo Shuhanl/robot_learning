@@ -9,16 +9,23 @@ class ReplayBuffer:
 
     def __init__(self):
         """Initialization."""
-        self.vision_buf = np.zeros([params.memory_size, *params.vision_dim], dtype=np.float32)
-        self.proprioception_buf = np.zeros([params.memory_size, params.proprioception_dim], dtype=np.float32)
+        self.memory_size = params.memory_size
+        self.vision_dim = params.vision_dim
+        self.proprioception_dim = params.proprioception_dim
+        self.action_dim = params.action_dim
+        self.batch_size = params.batch_size
 
-        self.next_vision_buf = np.zeros([params.memory_size, *params.vision_dim], dtype=np.float32)
-        self.next_proprioception_buf = np.zeros([params.memory_size, params.proprioception_dim], dtype=np.float32)
 
-        self.action_buf = np.zeros([params.memory_size, params.action_dim], dtype=np.float32)
-        self.reward_buf = np.zeros([params.memory_size], dtype=np.float32)
-        self.done_buf = np.zeros([params.memory_size], dtype=np.float32)
-        self.max_size = params.memory_size
+        self.vision_buf = np.zeros([self.memory_size, *self.vision_dim], dtype=np.float32)
+        self.proprioception_buf = np.zeros([self.memory_size, self.proprioception_dim], dtype=np.float32)
+
+        self.next_vision_buf = np.zeros([self.memory_size, *self.vision_dim], dtype=np.float32)
+        self.next_proprioception_buf = np.zeros([self.memory_size, self.proprioception_dim], dtype=np.float32)
+
+        self.action_buf = np.zeros([self.memory_size, self.action_dim], dtype=np.float32)
+        self.reward_buf = np.zeros([self.memory_size], dtype=np.float32)
+        self.done_buf = np.zeros([self.memory_size], dtype=np.float32)
+        self.max_size = self.memory_size
         self.ptr, self.size = 0, 0
 
     def store(self, vision: np.ndarray, proprioception: np.ndarray, action: np.ndarray, 
@@ -38,7 +45,7 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.max_size)
 
     def sample_batch(self) -> Dict[str, np.ndarray]:
-        indices = np.random.choice(self.size, size=params.batch_size, replace=False)
+        indices = np.random.choice(self.size, size=self.batch_size, replace=False)
         return dict(
             vision = self.vision_buf[indices],
             proprioception = self.proprioception_buf[indices],
@@ -106,7 +113,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
 
     def sample_batch(self) -> Dict[str, np.ndarray]:
         """Sample a batch of experiences."""
-        assert len(self) >= params.batch_size
+        assert len(self) >= self.batch_size
         assert self.beta > 0
         
         indices = self._sample_proportional()
@@ -140,9 +147,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         """Sample indices based on proportions."""
         indices = []
         p_total = self.sum_tree.sum(0, len(self) - 1)
-        segment = p_total / params.batch_size
+        segment = p_total / self.batch_size
         
-        for i in range(params.batch_size):
+        for i in range(self.batch_size):
             a = segment * i
             b = segment * (i + 1)
             upperbound = random.uniform(a, b)

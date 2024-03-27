@@ -101,6 +101,60 @@ class PlanRecognition(nn.Module):
 
         return dist
 
+class PlanRecognitionTransformer(nn.Module):
+    def __init__(self):
+        super(PlanRecognitionTransformer, self).__init__()
+        self.layer_size=2048
+        self.nhead=params.n_heads
+        self.epsilon=1e-4
+        self.max_seq_length = 1000
+        self.in_dim = params.vision_embedding_dim + params.proprioception_dim
+        self.latent_dim = params.latent_dim
+
+        self.position_embedding = nn.Embedding(self.max_seq_length, self.in_dim)
+
+        # Define the Transformer encoder layer (self-attention on the same sensor embedding sequence)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=self.in_dim, nhead=self.nhead, dim_feedforward=self.layer_size, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=1)
+    
+        # Transformer Decoder (Cross attention on different sensors embeddings sequences)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=self.in_dim, nhead=self.nhead, dim_feedforward=self.layer_size, batch_first=True)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
+
+
+        # Linear layers for the latent variables
+        self.mu = nn.Linear(self.in_dim, self.latent_dim)
+        self.sigma = nn.Linear(self.in_dim, self.latent_dim)
+
+    def latent_normal(self, mu, sigma):
+        dist = Normal(loc=mu, scale=sigma)
+        return dist
+
+    def forward(self, x):
+
+        # Determine sequence length from the current input
+        seq_length = x.size(1)  # Assuming [batch, seq_length, features]
+        
+        # Generate positional indices based on the current sequence length
+        positions = torch.arange(seq_length, device=x.device).expand((x.size(0), seq_length)).contiguous()
+        
+        # Add position embeddings
+        pos_embeddings = self.position_embedding(positions)
+        x += pos_embeddings
+
+        # Encoder
+        memory = self.transformer_encoder(x)
+
+        # Decoder with Cross-Attention
+        output = self.transformer_decoder(x, memory)
+
+        # Process output for latent variables as before
+        output = output[:, -1, :]
+        mu = self.mu(output)
+        sigma = F.softplus(self.sigma(output) + self.epsilon)
+        dist = self.latent_normal(mu, sigma)
+
+        return dist
     
 class PlanProposal(nn.Module):
     def __init__(self):
@@ -216,7 +270,7 @@ class DirectActor(nn.Module):
         self,
         layer_size=1024
     ):
-        super().__init__()
+        super(DirectActor, self).__init__()
         self.action_dim = params.action_dim
 
         self.in_dim = 2*params.vision_embedding_dim + params.latent_dim + params.proprioception_dim
@@ -232,6 +286,77 @@ class DirectActor(nn.Module):
         action = self.fc(x)
         return action
 
+class DirectActorTransformer(nn.Module):
+    def __init__(
+        self,
+        layer_size=1024, 
+    ):
+        super(DirectActorTransformer, self).__init__()
+        self.max_seq_length = 10
+        self.nhead = params.n_heads
+        self.action_dim = params.action_dim
+        self.in_dim = 2*params.vision_embedding_dim + params.latent_dim + params.proprioception_dim
+        self.device = params.device
+        self.batch_size = params.batch_size
+
+        # Initialize history buffers as tensors
+        self.vision_embeded_buffer = torch.zeros((self.batch_size, self.max_seq_length, params.vision_embedding_dim)).to(self.device)
+        self.proprioception_buffer = torch.zeros((self.batch_size, self.max_seq_length, params.proprioception_dim)).to(self.device)
+        self.latent_buffer = torch.zeros((self.batch_size, self.max_seq_length, params.latent_dim)).to(self.device)
+        self.goal_embeded_buffer = torch.zeros((self.batch_size, self.max_seq_length, params.vision_embedding_dim)).to(self.device)
+
+        self.position_embedding = nn.Embedding(self.max_seq_length, self.in_dim)
+
+        # Transformer Encoder Layer for self-attention on the same embedding sequence
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.in_dim, nhead=self.nhead, dim_feedforward=layer_size, batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
+
+        # Transformer Decoder Layer for cross-attention on different embedding sequences
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=self.in_dim, nhead=self.nhead, dim_feedforward=layer_size, batch_first=True
+        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
+
+        # Output fully connected layer
+        self.fc = nn.Sequential(nn.Linear(self.in_dim, self.action_dim), nn.Tanh())
+
+    def update_buffer(self, buffer, new_data):
+
+        return torch.cat((buffer[:, 1:, :], new_data.unsqueeze(1) ), dim=1)
+    
+    def forward(self, vision_embeded, proprioception, latent, goal_embeded):
+
+        # Update history buffers
+        self.vision_embeded_buffer = self.update_buffer(self.vision_embeded_buffer, vision_embeded)
+        self.proprioception_buffer = self.update_buffer(self.proprioception_buffer, proprioception)
+        self.latent_buffer = self.update_buffer(self.latent_buffer, latent)
+        self.goal_embeded_buffer = self.update_buffer(self.goal_embeded_buffer, goal_embeded)
+
+        # Concatenate historical data from all buffers
+        x = torch.cat([
+            self.vision_embeded_buffer, 
+            self.proprioception_buffer, 
+            self.latent_buffer, 
+            self.goal_embeded_buffer
+        ], dim=-1)
+        
+        # Generate positional indices and add position embeddings
+        positions = torch.arange(self.max_seq_length, device=self.device).expand((self.batch_size, self.max_seq_length)).contiguous()
+        pos_embeddings = self.position_embedding(positions)
+        x += pos_embeddings
+
+        memory = self.transformer_encoder(x)
+        output = self.transformer_decoder(x, memory)
+        
+        # Use the last decoder output for generating the action
+        output = output[:, -1, :]
+        
+        action = self.fc(output)
+        
+        return action
+
 class Critic(nn.Module):
     def __init__(self, layer_size=1024):
         super(Critic, self).__init__()
@@ -243,12 +368,13 @@ class Critic(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(layer_size, layer_size),
                                 nn.ReLU(),
-                                nn.Linear(layer_size, 1))
+                                nn.Linear(layer_size, 1), 
+                                nn.ReLU())
 
     def forward(self, vision_embed, proprioception, action):
 
         x = torch.cat([vision_embed, proprioception, action], dim=-1)
-        q_value = F.relu(self.fc(x))
+        q_value = self.fc(x)
 
         return q_value
     
