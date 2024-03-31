@@ -6,7 +6,7 @@ proprioception_dim = 7
 action_dim = 7
 latent_dim = 65
 num_distribs = 10
-batch_size = 30
+batch_size = 10
 num_workers = 2
 
 # Network parameters

@@ -40,6 +40,17 @@ class AgentTrainer():
     self.tau = params.tau
     self.beta = params.beta
 
+    # Initialize history buffers as tensors
+    self.max_seq_length = 10
+    self.vision_embeded_buffer = torch.zeros(
+        (self.batch_size, self.max_seq_length, params.vision_embedding_dim)).to(self.device)
+    self.proprioception_buffer = torch.zeros(
+        (self.batch_size, self.max_seq_length, params.proprioception_dim)).to(self.device)
+    self.latent_buffer = torch.zeros(
+        (self.batch_size, self.max_seq_length, params.latent_dim)).to(self.device)
+    self.goal_embeded_buffer = torch.zeros(
+        (self.batch_size, self.max_seq_length, params.vision_embedding_dim)).to(self.device)
+
     """ Wrap your models with DataParallel """
     if torch.cuda.device_count() > 1:
       print("Using", torch.cuda.device_count(), "GPUs!")
@@ -100,6 +111,10 @@ class AgentTrainer():
       if not greedy:
           next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
       return next_action
+
+  def update_buffer(self, buffer, data):
+    buffer = torch.cat((buffer, data.unsqueeze(1)), dim=1)
+    return buffer
   
   def pre_train(self, action_labels, video, proprioceptions):
 
@@ -112,8 +127,7 @@ class AgentTrainer():
     goal_embeded = video_embeded[:, -1, :]
 
     """ Combine CNN output with proprioception data """
-    combined = torch.cat([video_embeded, proprioceptions], dim=-1)
-    recognition_dist = self.plan_recognition(combined)
+    recognition_dist = self.plan_recognition(video_embeded, proprioceptions)
 
     """ Compute the loss for batches sequence of data """
     kl_loss, normal_kl_loss, recon_loss = 0, 0, 0
@@ -130,8 +144,16 @@ class AgentTrainer():
 
       proposal_latent = proposal_dist.sample()
       """ Prepend the goal to let the network attend to it """
-      # pred_action = torch.zeros_like(action_label)
-      pred_action = self.actor(vision_embeded, proprioception, proposal_latent, goal_embeded)
+     
+      # Update history buffers
+      self.vision_embeded_buffer = self.update_buffer(self.vision_embeded_buffer, vision_embeded)
+      self.proprioception_buffer = self.update_buffer(self.proprioception_buffer, proprioception)
+      self.latent_buffer = self.update_buffer(self.latent_buffer, proposal_latent)
+      self.goal_embeded_buffer = self.update_buffer(self.goal_embeded_buffer, goal_embeded)
+
+      # self.current_length  = min(self.current_length + 1, self.max_seq_length)
+      
+      pred_action = self.actor(self.vision_embeded_buffer, self.proprioception_buffer, self.latent_buffer, self.goal_embeded_buffer)
 
       recon_loss += self.mse_loss(action_label, pred_action)
 
