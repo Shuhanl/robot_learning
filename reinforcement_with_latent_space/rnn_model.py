@@ -164,8 +164,7 @@ class PlanProposal(nn.Module):
 
     def forward(self, vision_embedded, proprioception_embedded, goal_embedded):
 
-        x = torch.cat(
-            [vision_embedded, proprioception_embedded, goal_embedded], dim=1)  # (bs, 3*d_model)
+        x = torch.cat([vision_embedded, proprioception_embedded, goal_embedded], dim=1)  # (bs, 3*d_model)
         x = self.fc(x)
         mu = self.fc_mu(x)
         sigma = F.softplus(self.fc_sigma(x)+self.epsilon)
@@ -247,8 +246,7 @@ class LogisticActor(nn.Module):
 
         weightings = self.alpha(x).view(-1, self.action_dim, self.num_distribs)
         mu = self.mu(x).view(-1, self.action_dim, self.num_distribs)
-        scale = torch.nn.functional.softplus(self.sigma(
-            x + self.epsilon)).view(-1, self.action_dim, self.num_distribs)
+        scale = nn.functional.softplus(self.sigma(x)+self.epsilon).view(-1, self.action_dim, self.num_distribs)
         logistic_mixture = LogisticMixture(weightings, mu, scale, self.qbits)
 
         return logistic_mixture
