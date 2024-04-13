@@ -24,8 +24,8 @@ class AgentTrainer():
 
     self.plan_recognition = PlanRecognitionTransformer()
     self.plan_proposal = PlanProposal()
-    self.embedding_network = EmbeddingNetwork()
-    self.embedding_network_optimizer = optim.Adam(self.embedding_network.parameters(), lr=self.lr)
+    self.embedding = EmbeddingNetwork()
+    self.embedding_optimizer = optim.Adam(self.embedding.parameters(), lr=self.lr)
     self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
     self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
 
@@ -56,7 +56,7 @@ class AgentTrainer():
     """ Wrap your models with DataParallel """
     if torch.cuda.device_count() > 1:
       print("Using", torch.cuda.device_count(), "GPUs!")
-      self.embedding_network = torch.nn.DataParallel(self.embedding_network)
+      self.embedding = torch.nn.DataParallel(self.embedding)
       self.plan_recognition = torch.nn.DataParallel(self.plan_recognition)
 
       self.actor = torch.nn.DataParallel(self.actor)
@@ -66,7 +66,7 @@ class AgentTrainer():
 
     else:
       print("Using single GPU")
-      self.embedding_network = self.embedding_network.to(self.device)
+      self.embedding = self.embedding.to(self.device)
       self.plan_recognition = self.plan_recognition.to(self.device)
       self.plan_proposal = self.plan_proposal.to(self.device)
 
@@ -82,7 +82,7 @@ class AgentTrainer():
   def set_goal(self, goal):
     goal = torch.FloatTensor(goal).to(self.device)
     goal = goal.unsqueeze(0)
-    self.goal_embeded = self.embedding_network.vision_embed(goal)
+    self.goal_embeded = self.embedding.vision_embed(goal)
   
   def pre_train(self, action_labels, video, proprioception):
 
@@ -91,10 +91,10 @@ class AgentTrainer():
     proprioception = torch.FloatTensor(proprioception).to(self.device)
 
     sequence_length = video.shape[1]
-    video_embedded = torch.stack([self.embedding_network.vision_embed(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
-    proprioception_embedded = self.embedding_network.proprioception_embed(proprioception)
+    video_embedded = torch.stack([self.embedding.vision_embed(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
+    proprioception_embedded = self.embedding.proprioception_embed(proprioception)
     position = torch.arange(video_embedded.shape[1], device=self.device).expand((self.batch_size, video_embedded.shape[1])).contiguous()
-    position_embedded = self.embedding_network.position_embed(position)
+    position_embedded = self.embedding.position_embed(position)
 
     goal_embedded = video_embedded[:, -1, :]
 
@@ -122,7 +122,7 @@ class AgentTrainer():
       """ Prepend the goal to let the network attend to it """
       
       pred_action = self.actor.get_action(video_embedded[:, :i, :], proprioception_embedded[:, :i, :], latent_buffer, goal_embedded, action_buffer, position_embedded)
-      action_embedded= self.embedding_network.action_embed(pred_action)
+      action_embedded= self.embedding.action_embed(pred_action)
       action_buffer = torch.cat([action_buffer, action_embedded.unsqueeze(1)], dim=1)
 
       recon_loss += self.mse_loss(action_labels[:, i, :], pred_action)
@@ -131,21 +131,21 @@ class AgentTrainer():
     loss = self.beta*(kl_loss + normal_kl_loss) + recon_loss / sequence_length
 
     # Assuming the loss applies to all model components and they're all connected in the computational graph.
-    self.embedding_network.zero_grad()
-    self.plan_recognition.zero_grad()
-    self.plan_proposal.zero_grad()
-    self.actor.zero_grad()
+    self.embedding_optimizer.zero_grad()
+    self.plan_recognition_optimizer.zero_grad()
+    self.plan_proposal_optimizer.zero_grad()
+    self.actor_optimizer.zero_grad()
 
     # Only need to call backward once if all parts are connected and contribute to the loss.
     loss.backward()
 
-    clip_grad_norm_(self.embedding_network.parameters(), max_norm=self.grad_norm_clipping)
+    clip_grad_norm_(self.embedding.parameters(), max_norm=self.grad_norm_clipping)
     clip_grad_norm_(self.plan_recognition.parameters(), max_norm=self.grad_norm_clipping)
     clip_grad_norm_(self.plan_proposal.parameters(), max_norm=self.grad_norm_clipping)
     clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
 
     # Then step each optimizer
-    self.embedding_network_optimizer.step()
+    self.embedding_optimizer.step()
     self.plan_recognition_optimizer.step()
     self.plan_proposal_optimizer.step()
     self.actor_optimizer.step()
@@ -157,9 +157,9 @@ class AgentTrainer():
     with torch.no_grad():
       proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
       vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
-      vision_embeded = self.embedding_network.vision_embed(vision)
+      vision_embeded = self.embedding.vision_embed(vision)
       vision_embeded = vision_embeded.unsqueeze(0)
-      proprioception_embedded = self.embedding_network.proprioception_embed(proprioception)
+      proprioception_embedded = self.embedding.proprioception_embed(proprioception)
       proprioception_embedded = proprioception_embedded.unsqueeze(0)
 
       proposal_dist = self.plan_proposal(vision_embeded[:, 0, :], proprioception_embedded[:, 0, :], self.goal_embeded)
@@ -167,10 +167,10 @@ class AgentTrainer():
       self.latent_buffer = self.update_buffer(self.latent_buffer, proposal_latent)
 
       position = torch.arange(self.latent_buffer.shape[1], device=self.device).expand((1, self.latent_buffer.shape[1])).contiguous()
-      position_embedded = self.embedding_network.position_embed(position)
+      position_embedded = self.embedding.position_embed(position)
 
       action = self.actor.get_action(vision_embeded, proprioception_embedded, self.action_buffer, self.goal_embeded, self.action_buffer, position_embedded)
-      action_embedded= self.embedding_network.action_embed(action)
+      action_embedded= self.embedding.action_embed(action)
       self.action_buffer = self.update_buffer(self.action_buffer, action_embedded)
 
       if not greedy:
@@ -187,7 +187,7 @@ class AgentTrainer():
       self.latent_buffer = self.update_buffer(self.latent_buffer, proposal_latent)
 
       next_action = self.target_actor.get_action(vision_embedded, proprioception_embedded, proposal_latent, self.goal_embeded)
-      next_action_embedded= self.embedding_network.action_embed(next_action)
+      next_action_embedded= self.embedding.action_embed(next_action)
       self.action_buffer = self.update_buffer(self.action_buffer, next_action_embedded)
 
       if not greedy:
@@ -230,11 +230,11 @@ class AgentTrainer():
     done = torch.FloatTensor(done).to(self.device)
     goal_embedded = self.goal_embeded.repeat(vision.shape[0], 1, 1, 1)
 
-    vision_embedded = self.embedding_network.vision_embed(vision)
-    next_vision_embedded = self.embedding_network.vision_embed(next_vision)
-    proprioception_embedded = self.embedding_network.proprioception_embed(proprioception)
-    next_proprioception_embedded = self.embedding_network.proprioception_embed(next_proprioception)
-    action_embedded = self.embedding_network.action_embed(action)
+    vision_embedded = self.embedding.vision_embed(vision)
+    next_vision_embedded = self.embedding.vision_embed(next_vision)
+    proprioception_embedded = self.embedding.proprioception_embed(proprioception)
+    next_proprioception_embedded = self.embedding.proprioception_embed(next_proprioception)
+    action_embedded = self.embedding.action_embed(action)
 
     td_errors, critic_loss = self._td_target(goal_embedded, vision_embedded, 
                                              next_vision_embedded, proprioception_embedded, next_proprioception_embedded, action_embedded, reward, done)
@@ -270,7 +270,7 @@ class AgentTrainer():
       
     # Create a checkpoint dictionary containing the state dictionaries of all components
     checkpoint = {
-        'embedding_network_state_dict': self.embedding_network.state_dict(),
+        'embedding_state_dict': self.embedding.state_dict(),
         'plan_recognition_state_dict': self.plan_recognition.state_dict(),
         'plan_proposal_state_dict': self.plan_proposal.state_dict(),
         'actor_state_dict': self.actor.state_dict(),
@@ -286,7 +286,7 @@ class AgentTrainer():
   def load_checkpoint(self, filename):
       checkpoint = torch.load(filename)
 
-      self.embedding_network.load_state_dict(checkpoint['embedding_network_state_dict'])
+      self.embedding.load_state_dict(checkpoint['embedding_state_dict'])
       self.plan_recognition.load_state_dict(checkpoint['plan_recognition_state_dict'])
       self.plan_proposal.load_state_dict(checkpoint['plan_proposal_state_dict'])
 

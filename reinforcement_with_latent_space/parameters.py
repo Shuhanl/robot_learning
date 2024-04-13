@@ -17,13 +17,22 @@ n_heads = 8
 d_model = 512
 sequence_length = 150
 
+# PPO parameters
+epsilon =  0.2 # clip parameter for PPO
+gamma = 0.99
+lmbda = 0.95
+entropy_weight = 1e-4
+tau = 0.01
+
+# Target RL parameters
+target_tau = 0.01
+target_gamma = 0.99
 
 # Training hyperparameters
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 lr=0.001
 grad_norm_clipping = 0.5
 beta = 0.01
-tau = 0.01
 memory_size = int(1e3)
 num_episodes = 100
 batch_size = 5

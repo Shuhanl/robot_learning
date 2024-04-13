@@ -119,8 +119,8 @@ class PlanRecognitionTransformer(nn.Module):
             encoder_layers, num_layers=1)
 
         # Linear layers for the latent variables
-        self.mu = nn.Linear(self.d_model, self.latent_dim)
-        self.sigma = nn.Linear(self.d_model, self.latent_dim)
+        self.fc_mu = nn.Linear(self.d_model, self.latent_dim)
+        self.fc_sigma = nn.Linear(self.d_model, self.latent_dim)
 
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
@@ -142,8 +142,8 @@ class PlanRecognitionTransformer(nn.Module):
 
         # Process output for latent variables as before
         x = x[:, -1, :]
-        mu = self.mu(x)
-        sigma = F.softplus(self.sigma(x) + self.epsilon)
+        mu = self.fc_mu(x)
+        sigma = F.softplus(self.fc_sigma(x) + self.epsilon)
         dist = self.latent_normal(mu, sigma)
 
         return dist
@@ -166,22 +166,21 @@ class PlanProposal(nn.Module):
                                 nn.Linear(self.layer_size, self.layer_size),
                                 nn.ReLU(),
                                 nn.Linear(self.layer_size, self.layer_size),
-                                nn.ReLU(),
-                                nn.Linear(self.layer_size, self.latent_dim))
+                                nn.ReLU())
+        self.fc_mu = nn.Linear(self.layer_size, self.latent_dim)
+        self.fc_sigma = nn.Linear(self.layer_size, self.latent_dim)
 
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
         return dist
 
     def forward(self, vision_embedded, proprioception_embedded, goal_embedded):
-        """
-        x: (bs, input_size) -> input_size: goal (vision only) + current (visuo-proprio)
-        """
 
         x = torch.cat(
-            [vision_embedded, proprioception_embedded, goal_embedded], dim=1)
-        mu = self.fc(x)
-        sigma = F.softplus(self.fc(x+self.epsilon))
+            [vision_embedded, proprioception_embedded, goal_embedded], dim=1)  # (bs, 3*d_model)
+        x = self.fc(x)
+        mu = self.fc_mu(x)
+        sigma = F.softplus(self.fc_sigma(x)+self.epsilon)
         dist = self.latent_normal(mu, sigma)
 
         return dist
@@ -323,7 +322,7 @@ class DirectActorTransformer(nn.Module):
         # which works nice in an autoregressive sense since states predict actions
 
         x = torch.cat(
-            (vision_embedded, proprioception_embedded, goal_embedded), dim=1)
+            (vision_embedded, proprioception_embedded, goal_embedded), dim=1)  # (bs, 2*seq_len+1, d_model)
 
         x = self.transformer_encoder(x)  # (bs, 2*seq_len+1, d_model)
         x, _ = self.cross_attention(x, latent, latent)  # (bs, 2*seq_len+1, d_model)
