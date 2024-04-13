@@ -15,7 +15,7 @@ class AgentTrainer():
     self.action_dim = params.action_dim
     self.batch_size = params.batch_size
     self.grad_norm_clipping = params.grad_norm_clipping
-    self.goal_embedded = None
+    self.goal = None
 
     print(self.device)
 
@@ -93,8 +93,8 @@ class AgentTrainer():
   def set_goal(self, goal):
     self.embedding.eval()
     goal = torch.FloatTensor(goal).to(self.device)
-    goal = goal.unsqueeze(0)
-    self.goal_embedded = self.embedding.vision_embed(goal)
+    self.goal = goal.unsqueeze(0)
+    # self.goal_embedded = self.embedding.vision_embed(goal)
 
   def get_action(self, vision, proprioception, greedy=True):
 
@@ -109,11 +109,12 @@ class AgentTrainer():
       vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
       vision_embeded = self.embedding.vision_embed(vision)
       proprioception_embedded = self.embedding.proprioception_embed(proprioception)
+      goal_embedded = self.embedding.vision_embed(self.goal)
 
-      proposal_dist = self.plan_proposal(vision_embeded, proprioception_embedded, self.goal_embedded)
+      proposal_dist = self.plan_proposal(vision_embeded, proprioception_embedded, goal_embedded)
       proposal_latent = proposal_dist.sample()
 
-      action = self.actor(vision_embeded, proprioception_embedded, proposal_latent, self.goal_embedded)
+      action = self.actor(vision_embeded, proprioception_embedded, proposal_latent, goal_embedded)
 
       if not greedy:
           action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
@@ -186,7 +187,7 @@ class AgentTrainer():
   def fine_tune(self):
 
     torch.autograd.set_detect_anomaly(True)
-    critic_loss, actor_loss = self.target_rl.update_model(self.goal_embedded)
+    critic_loss, actor_loss = self.target_rl.update_model(self.goal)
     self.target_rl.update_target()
 
     return critic_loss, actor_loss

@@ -179,8 +179,16 @@ class TargetRL:
             next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
         return next_action
     
-    def td_target(self, vision_embedded, next_vision_embedded, proprioception_embedded, 
-                    next_proprioception_embedded, action_embedded, goal_embedded, reward, done):
+    def td_target(self, vision, next_vision, proprioception, 
+                    next_proprioception, action, goal, reward, done):
+
+
+        vision_embedded = self.embedding.vision_embed(vision)
+        next_vision_embedded = self.embedding.vision_embed(next_vision)
+        proprioception_embedded = self.embedding.proprioception_embed(proprioception)
+        next_proprioception_embedded = self.embedding.proprioception_embed(next_proprioception)
+        action_embedded = self.embedding.action_embed(action)
+        goal_embedded = self.embedding.vision_embed(goal)
 
         current_q = self.critic(vision_embedded, proprioception_embedded, action_embedded)
         next_action = self.get_next_action(vision_embedded, proprioception_embedded, goal_embedded, greedy=True)
@@ -193,7 +201,7 @@ class TargetRL:
 
         return td_errors, critic_loss
 
-    def update_model(self, goal_embedded):
+    def update_model(self, goal):
 
         self.embedding.eval()
         self.plan_proposal.eval()
@@ -214,17 +222,17 @@ class TargetRL:
         action = torch.FloatTensor(action).to(self.device)
         reward = torch.FloatTensor(reward).to(self.device)
         done = torch.FloatTensor(done).to(self.device)
-        goal_embedded = goal_embedded.repeat(vision.shape[0], 1)  
+        goal = goal.repeat(vision.shape[0], 1, 1, 1)  
 
         vision_embedded = self.embedding.vision_embed(vision)
-        next_vision_embedded = self.embedding.vision_embed(next_vision)
+        # next_vision_embedded = self.embedding.vision_embed(next_vision)
         proprioception_embedded = self.embedding.proprioception_embed(proprioception)
-        next_proprioception_embedded = self.embedding.proprioception_embed(next_proprioception)
+        # next_proprioception_embedded = self.embedding.proprioception_embed(next_proprioception)
         action_embedded = self.embedding.action_embed(action)
         
-        td_errors, critic_loss = self.td_target(vision_embedded, 
-                                            next_vision_embedded, proprioception_embedded, 
-                                            next_proprioception_embedded, action_embedded, goal_embedded, reward, done)
+        td_errors, critic_loss = self.td_target(vision, 
+                                            next_vision, proprioception, 
+                                            next_proprioception, action, goal, reward, done)
         """ Update priorities based on TD errors """
         self.pri_buffer.update_priorities(indices, td_errors.detach().cpu().numpy())
 
@@ -238,11 +246,11 @@ class TargetRL:
         pg = (action.pow(2)).mean()
         actor_loss = pr + 0.1*pg
 
-        # """ Update actor """
-        # self.actor_optimizer.zero_grad()
-        # actor_loss.backward()
-        # clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
-        # self.actor_optimizer.step()
+        """ Update actor """
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
+        self.actor_optimizer.step()
 
         return actor_loss.item(), critic_loss.item()
 
