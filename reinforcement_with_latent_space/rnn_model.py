@@ -1,12 +1,27 @@
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.nn.functional as F
 from torch.distributions import Normal
 from torch.distributions import Categorical, Distribution, AffineTransform, TransformedDistribution, SigmoidTransform
 from torch.distributions.mixture_same_family import MixtureSameFamily
 from torch.distributions.uniform import Uniform
 import parameters as params
-import numpy as np
+
+def init_lstm(lstm):
+    # Initialize the gates
+    for name, param in lstm.named_parameters():
+        if 'weight_ih' in name:  # Input-hidden weights (4 gates)
+            init.xavier_uniform_(param.data)
+        elif 'weight_hh' in name:  # Hidden-hidden weights (4 gates)
+            init.orthogonal_(param.data)
+        elif 'bias' in name:  # Bias values
+            param.data.fill_(0)
+
+def init_linear(linear):
+    init.xavier_uniform_(linear.weight)
+    if linear.bias is not None:
+        linear.bias.data.fill_(0.01)  # Small constant to avoid dead neurons
 
 
 class VisionNetwork(nn.Module):
@@ -117,6 +132,11 @@ class PlanRecognition(nn.Module):
                              batch_first=True, bidirectional=True)
         self.fc_mu = nn.Linear(2 * self.layer_size, self.latent_dim)
         self.fc_sigma = nn.Linear(2 * self.layer_size, self.latent_dim)
+
+        init_lstm(self.lstm1)
+        init_lstm(self.lstm2)
+        init_linear(self.fc_mu)
+        init_linear(self.fc_sigma)
 
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
@@ -259,8 +279,11 @@ class DirectActor(nn.Module):
     ):
         super(DirectActor, self).__init__()
         self.action_dim = params.action_dim
+        self.sequence_length = params.sequence_length
+        self.d_model = params.d_model
+        self.in_dim = params.d_model
+        self.device = params.device
 
-        self.in_dim = 3*params.d_model + params.latent_dim
         self.lstm1 = nn.LSTM(input_size=self.in_dim,
                              hidden_size=layer_size, batch_first=True)
         self.lstm2 = nn.LSTM(input_size=layer_size,
@@ -268,42 +291,42 @@ class DirectActor(nn.Module):
 
         self.fc = nn.Sequential(
             nn.Linear(layer_size, self.action_dim), nn.Tanh())
+        
+        init_lstm(self.lstm1)
+        init_lstm(self.lstm2)
+        init_linear(self.fc[0])
 
     def forward(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
-        x = torch.cat([vision_embedded, proprioception_embedded, latent, goal_embedded], dim=1)  # (bs, 2*seq_len+1, d_model)
+
+        # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ... latent, goal)
+        # which works nice in an autoregressive sense since states predict actions
+        x = torch.cat([vision_embedded, proprioception_embedded, latent, goal_embedded], dim=1)  # (bs, 2*seq_len+2, d_model)
         x, _ = self.lstm1(x)
         x, _ = self.lstm2(x)
+        x = x[:, -1, :]    # Take the last element of the sequence
         action = self.fc(x)
         return action
 
-    # def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded, position_embedded):
-    #     """
-    #     Get the action for the current state
-    #     """
+    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
+        """
+        Get the action for the current state
+        """
 
-    #     vision_embedded = vision_embedded[:, -self.sequence_length:, :]
-    #     proprioception_embedded = proprioception_embedded[:, -self.sequence_length:, :]
-    #     latent = latent[:, -self.sequence_length:, :]
-    #     action_embedded = action_embedded[:, -self.sequence_length:, :]
-    #     goal_embedded = goal_embedded.unsqueeze(1)
+        vision_embedded = vision_embedded[:, -self.sequence_length:, :]
+        proprioception_embedded = proprioception_embedded[:, -self.sequence_length:, :]
+        goal_embedded = goal_embedded.unsqueeze(1)
+        latent = latent.unsqueeze(1)
 
-    #     # pad all tokens to sequence length
-    #     vision_embedded = torch.cat([torch.zeros((vision_embedded.shape[0], self.sequence_length -
-    #                                 vision_embedded.shape[1], self.d_model), device=self.device), vision_embedded], dim=1)
-    #     proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
-    #                                         proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
-    #     latent = torch.cat([torch.zeros((latent.shape[0], self.sequence_length -
-    #                        latent.shape[1], self.latent_dim), device=self.device), latent], dim=1)
-    #     action_embedded = torch.cat([torch.zeros((action_embedded.shape[0], self.sequence_length -
-    #                                 action_embedded.shape[1], self.d_model), device=self.device), action_embedded], dim=1)
+        # pad all tokens to sequence length
+        vision_embedded = torch.cat([torch.zeros((vision_embedded.shape[0], self.sequence_length -
+                                    vision_embedded.shape[1], self.d_model), device=self.device), vision_embedded], dim=1)
+        proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
+                                            proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
 
-    #     position_embedded = torch.cat([torch.zeros((position_embedded.shape[0], self.sequence_length -
-    #                                   position_embedded.shape[1], self.d_model), device=self.device), position_embedded], dim=1)
+        action = self.forward(
+            vision_embedded, proprioception_embedded, latent, goal_embedded)
 
-    #     action = self.forward(
-    #         vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded, position_embedded)
-
-    #     return action
+        return action
 
 
 class Critic(nn.Module):
@@ -317,8 +340,7 @@ class Critic(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(layer_size, layer_size),
                                 nn.ReLU(),
-                                nn.Linear(layer_size, 1),
-                                nn.ReLU())
+                                nn.Linear(layer_size, 1))
 
     def forward(self, vision_embedded, proprioception_embedded, action_embedded):
 

@@ -162,18 +162,29 @@ class TargetRL:
         self.gamma = gamma
         self.grad_norm_clipping = params.grad_norm_clipping
         self.device = params.device
+        self.sequence_length = params.sequence_length
+        self.bacth_size = params.batch_size 
 
-    def init_buffer(self, vision, proprioception, action, 
-              reward, next_vision, next_proprioception, done):
-    
+        # Initialize buffers as tensors
+        self.vision_buffer = torch.empty((self.bacth_size, self.sequence_length, params.d_model)).to(self.device)
+        self.pproprioception_buffer = torch.empty((self.bacth_size, self.sequence_length, params.d_model)).to(self.device)
+
+    def store_buffer(self, vision, proprioception, action, reward, next_vision, next_proprioception, done):
         self.pri_buffer.store(vision, proprioception, action, reward, next_vision, next_proprioception, done)
+
+
+    def update_buffer(self, buffer, new_data):
+
+        return torch.cat((buffer[:, 1:, :], new_data.unsqueeze(1) ), dim=1)
 
     def get_next_action(self, vision_embedded, proprioception_embedded, goal_embedded, greedy=True):
     
         proposal_dist = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded)
         proposal_latent = proposal_dist.sample()
 
-        next_action = self.target_actor(vision_embedded, proprioception_embedded, proposal_latent, goal_embedded)
+        self.vision_buffer = self.update_buffer(self.vision_buffer, vision_embedded)
+        self.pproprioception_buffer = self.update_buffer(self.pproprioception_buffer, proprioception_embedded)
+        next_action = self.target_actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
 
         if not greedy:
             next_action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
@@ -191,6 +202,7 @@ class TargetRL:
         goal_embedded = self.embedding.vision_embed(goal)
 
         current_q = self.critic(vision_embedded, proprioception_embedded, action_embedded)
+
         next_action = self.get_next_action(vision_embedded, proprioception_embedded, goal_embedded, greedy=True)
         next_action_embedded = self.embedding.action_embed(next_action)
         next_q = self.target_critic(next_vision_embedded, next_proprioception_embedded, next_action_embedded)
@@ -207,8 +219,6 @@ class TargetRL:
         self.plan_proposal.eval()
         self.actor.train()
         self.critic.train()
-        # self.target_actor.eval()
-        # self.target_critic.eval()
 
         buffer = self.pri_buffer.sample_batch()
         vision, proprioception, next_vision, next_proprioception, action, reward, done, weights, indices = buffer['vision'], \
@@ -224,15 +234,26 @@ class TargetRL:
         done = torch.FloatTensor(done).to(self.device)
         goal = goal.repeat(vision.shape[0], 1, 1, 1)  
 
-        vision_embedded = self.embedding.vision_embed(vision)
-        # next_vision_embedded = self.embedding.vision_embed(next_vision)
-        proprioception_embedded = self.embedding.proprioception_embed(proprioception)
-        # next_proprioception_embedded = self.embedding.proprioception_embed(next_proprioception)
-        action_embedded = self.embedding.action_embed(action)
+        td_errors, critic_losses, pg = 0, 0, 0
+        for i in range(self.sequence_length):
+            vision_embedded = self.embedding.vision_embed(vision[:, i, :, :, :])
+            # next_vision_embedded = self.embedding.vision_embed(next_vision)
+            proprioception_embedded = self.embedding.proprioception_embed(proprioception[:, i, :])
+            # next_proprioception_embedded = self.embedding.proprioception_embed(next_proprioception)
+            action_embedded = self.embedding.action_embed(action[:, i, :])
+            
+            td_error, critic_loss = self.td_target(vision[:, i, :, :, :], next_vision[:, i, :, :, :], proprioception[:, i, :],
+                                                next_proprioception[:, i, :], action[:, i, :], goal, reward[:, i], done[:, i])
+                                            
+            td_errors += td_error
+            critic_losses += critic_loss
+            pg += (action.pow(2)).mean()
+            
         
-        td_errors, critic_loss = self.td_target(vision, 
-                                            next_vision, proprioception, 
-                                            next_proprioception, action, goal, reward, done)
+        td_errors /= self.sequence_length
+        critic_losses /= self.sequence_length
+        pg /= self.sequence_length
+
         """ Update priorities based on TD errors """
         self.pri_buffer.update_priorities(indices, td_errors.detach().cpu().numpy())
 
@@ -243,7 +264,6 @@ class TargetRL:
         self.critic_optimizer.step()
 
         pr = -self.critic(vision_embedded, proprioception_embedded, action_embedded).mean()
-        pg = (action.pow(2)).mean()
         actor_loss = pr + 0.1*pg
 
         """ Update actor """

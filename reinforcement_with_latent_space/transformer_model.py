@@ -134,7 +134,6 @@ class PlanRecognitionTransformer(nn.Module):
 
         # this makes the sequence look like (video_1, pro_1, a_1, video_2, pro_2, a_2, ...)
         # which works nice in an autoregressive sense since states predict actions
-
         x = torch.cat((video_embedded, proprioception_embedded), dim=1)
 
         # Encoder
@@ -318,7 +317,7 @@ class DirectActorTransformer(nn.Module):
         proprioception_embedded += position_embedded
         action_embedded += position_embedded
 
-        # this makes the sequence look like (vision_1, pro_1, goal_1, vision_2, pro_2, goal_2, ...)
+        # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ... goal)
         # which works nice in an autoregressive sense since states predict actions
 
         x = torch.cat(

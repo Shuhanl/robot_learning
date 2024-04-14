@@ -14,37 +14,47 @@ class ReplayBuffer:
         self.proprioception_dim = params.proprioception_dim
         self.action_dim = params.action_dim
         self.batch_size = params.batch_size
+        self.sequence_length = params.sequence_length    
 
+        self.vision_buf = np.zeros([self.memory_size, self.sequence_length, *self.vision_dim], dtype=np.float32)
+        self.proprioception_buf = np.zeros([self.memory_size, self.sequence_length, self.proprioception_dim], dtype=np.float32)
 
-        self.vision_buf = np.zeros([self.memory_size, *self.vision_dim], dtype=np.float32)
-        self.proprioception_buf = np.zeros([self.memory_size, self.proprioception_dim], dtype=np.float32)
+        self.next_vision_buf = np.zeros([self.memory_size, self.sequence_length, *self.vision_dim], dtype=np.float32)
+        self.next_proprioception_buf = np.zeros([self.memory_size, self.sequence_length, self.proprioception_dim], dtype=np.float32)
 
-        self.next_vision_buf = np.zeros([self.memory_size, *self.vision_dim], dtype=np.float32)
-        self.next_proprioception_buf = np.zeros([self.memory_size, self.proprioception_dim], dtype=np.float32)
-
-        self.action_buf = np.zeros([self.memory_size, self.action_dim], dtype=np.float32)
-        self.reward_buf = np.zeros([self.memory_size], dtype=np.float32)
-        self.done_buf = np.zeros([self.memory_size], dtype=np.float32)
+        self.action_buf = np.zeros([self.memory_size, self.sequence_length, self.action_dim], dtype=np.float32)
+        self.reward_buf = np.zeros([self.memory_size, self.sequence_length], dtype=np.float32)
+        self.done_buf = np.zeros([self.memory_size, self.sequence_length], dtype=np.float32)
         self.max_size = self.memory_size
         self.ptr, self.size = 0, 0
+        self.sequence_counter = 0
 
+        
     def store(self, vision: np.ndarray, proprioception: np.ndarray, action: np.ndarray, 
               reward: np.ndarray, next_vision: np.ndarray, next_proprioception: np.ndarray, done: np.ndarray):
         """Store experience to the buffer."""
-        self.vision_buf[self.ptr] = vision
-        self.proprioception_buf[self.ptr] = proprioception
+        if self.sequence_counter < self.sequence_length:
+            self.vision_buf[self.ptr, self.sequence_counter] = vision
+            self.proprioception_buf[self.ptr, self.sequence_counter] = proprioception
 
-        self.next_vision_buf[self.ptr] = next_vision
-        self.next_proprioception_buf[self.ptr] = next_proprioception
-        
-        self.action_buf[self.ptr] = action
-        self.reward_buf[self.ptr] = reward
-        self.done_buf[self.ptr] = done
+            self.next_vision_buf[self.ptr, self.sequence_counter] = next_vision
+            self.next_proprioception_buf[self.ptr, self.sequence_counter] = next_proprioception
+            
+            self.action_buf[self.ptr, self.sequence_counter] = action
+            self.reward_buf[self.ptr, self.sequence_counter] = reward
+            self.done_buf[self.ptr, self.sequence_counter] = done
+            self.sequence_counter += 1
 
-        self.ptr = (self.ptr + 1) % self.max_size
-        self.size = min(self.size + 1, self.max_size)
+            if done or self.sequence_counter == self.sequence_length:
+                self.sequence_counter = 0
+                self.ptr = (self.ptr + 1) % self.max_size
+                self.size = min(self.size + 1, self.max_size)    
 
     def sample_batch(self) -> Dict[str, np.ndarray]:
+
+        if self.size < self.batch_size:
+            raise ValueError("Not enough entries in buffer to sample without replacement.")
+    
         indices = np.random.choice(self.size, size=self.batch_size, replace=False)
         return dict(
             vision = self.vision_buf[indices],
