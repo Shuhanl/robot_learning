@@ -42,9 +42,9 @@ class AgentTrainer():
     self.sequence_length = params.sequence_length
 
     # Initialize buffers as tensors
-    self.latent_buffer = torch.empty(
-        (1, self.sequence_length, params.latent_dim)).to(self.device)
-    self.action_buffer = torch.empty(
+    self.vision_buffer = torch.empty(
+        (1, self.sequence_length, params.d_model)).to(self.device)
+    self.pproprioception_buffer = torch.empty(
         (1, self.sequence_length, params.d_model)).to(self.device)
 
     """ Wrap your models with DataParallel """
@@ -98,7 +98,6 @@ class AgentTrainer():
 
   def get_action(self, vision, proprioception, greedy=True):
 
-    torch.autograd.set_detect_anomaly(True)
     self.embedding.eval()
     self.plan_recognition.eval()
     self.plan_proposal.eval()
@@ -107,24 +106,27 @@ class AgentTrainer():
     with torch.no_grad():
       proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
       vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
-      vision_embeded = self.embedding.vision_embed(vision)
+
+      vision_embedded = self.embedding.vision_embed(vision)
       proprioception_embedded = self.embedding.proprioception_embed(proprioception)
       goal_embedded = self.embedding.vision_embed(self.goal)
 
-      proposal_dist = self.plan_proposal(vision_embeded, proprioception_embedded, goal_embedded)
+      self.vision_buffer = self.update_buffer(self.vision_buffer, vision_embedded)
+      self.pproprioception_buffer = self.update_buffer(self.pproprioception_buffer, proprioception_embedded)
+
+      proposal_dist = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded)
       proposal_latent = proposal_dist.sample()
 
-      action = self.actor(vision_embeded, proprioception_embedded, proposal_latent, goal_embedded)
-
-      if not greedy:
-          action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
-
+      action = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
+      
       action = action.detach().cpu().numpy()
+      if not greedy:
+          action += self.noise.sample()
+
       return action[0]
 
   def pre_train(self, action_labels, video, proprioception):
 
-    torch.autograd.set_detect_anomaly(True)
     self.embedding.train()
     self.plan_recognition.train()
     self.plan_proposal.train()
@@ -155,7 +157,7 @@ class AgentTrainer():
       proposal_latent = proposal_dist.sample()
       """ Prepend the goal to let the network attend to it """
       
-      pred_action = self.actor(video_embedded[:, i, :], proprioception_embedded[:, i, :], proposal_latent, goal_embedded)
+      pred_action = self.actor.get_action(video_embedded[:, :i, :], proprioception_embedded[:, :i, :], proposal_latent, goal_embedded)
 
       recon_loss += self.mse_loss(action_labels[:, i, :], pred_action)
 
@@ -186,7 +188,6 @@ class AgentTrainer():
   
   def fine_tune(self):
 
-    torch.autograd.set_detect_anomaly(True)
     critic_loss, actor_loss = self.target_rl.update_model(self.goal)
     self.target_rl.update_target()
 

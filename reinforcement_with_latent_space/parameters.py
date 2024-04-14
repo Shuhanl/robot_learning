@@ -15,7 +15,7 @@ qbits = 8
 # Transformer parameters
 n_heads = 8
 d_model = 512
-sequence_length = 150
+sequence_length = 30
 
 # PPO parameters
 epsilon =  0.2 # clip parameter for PPO
