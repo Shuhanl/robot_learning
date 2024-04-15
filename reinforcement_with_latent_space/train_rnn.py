@@ -67,7 +67,7 @@ class AgentTrainer():
       self.target_actor = self.target_actor.to(self.device)
       self.target_critic = self.target_critic.to(self.device)
   
-    # ppo = PPO(
+    # self.ppo = PPO(embedding=self.embedding, plan_proposal=self.plan_proposal,
     #     actor_network=self.actor,
     #     critic_network=self.critic,
     #     actor_optimizer=self.actor_optimizer,
@@ -75,7 +75,7 @@ class AgentTrainer():
     #     gamma = params.gamma,
     #     tau = params.tau,
     #     epsilon = params.epsilon,
-    #     entropy_weight = params.entropy_weight)
+    #     entropy_weight = params.entropy_weight, env = env)
     
     self.target_rl = TargetRL(embedding=self.embedding, plan_proposal=self.plan_proposal, 
               actor=self.actor,
@@ -114,10 +114,9 @@ class AgentTrainer():
       self.vision_buffer = self.update_buffer(self.vision_buffer, vision_embedded)
       self.pproprioception_buffer = self.update_buffer(self.pproprioception_buffer, proprioception_embedded)
 
-      proposal_dist = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded)
-      proposal_latent = proposal_dist.sample()
+      latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
 
-      action = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
+      action = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded)
       
       action = action.detach().cpu().numpy()
       if not greedy:
@@ -155,8 +154,7 @@ class AgentTrainer():
                                                  proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
       proposal_latent = proposal_dist.sample()
-      """ Prepend the goal to let the network attend to it """
-      
+      """ Prepend the goal to let the network attend to it """   
       pred_action = self.actor.get_action(video_embedded[:, :i, :], proprioception_embedded[:, :i, :], proposal_latent, goal_embedded)
 
       recon_loss += self.mse_loss(action_labels[:, i, :], pred_action)
