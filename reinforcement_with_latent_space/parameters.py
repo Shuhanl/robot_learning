@@ -15,7 +15,7 @@ qbits = 8
 # Transformer parameters
 n_heads = 8
 d_model = 512
-sequence_length = 30
+sequence_length = 2
 
 # PPO parameters
 epsilon =  0.2 # clip parameter for PPO
@@ -23,6 +23,7 @@ gamma = 0.99
 lmbda = 0.95
 entropy_weight = 1e-4
 tau = 0.01
+rollout_length = 2048
 
 # Target RL parameters
 target_tau = 0.01

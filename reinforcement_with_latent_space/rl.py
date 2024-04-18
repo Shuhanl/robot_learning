@@ -36,15 +36,12 @@ class PPO:
         gamma: float,
         tau: float,
         epsilon: float,
-        entropy_weight: float,
-        env
     ):
         """Initialize."""
         self.gamma = gamma
         self.tau = tau
         self.epsilon = epsilon
-        self.entropy_weight = entropy_weight
-        self.env = env
+        self.env = None
 
         # networks
         self.plan_proposal = plan_proposal
@@ -56,8 +53,10 @@ class PPO:
         self.actor_optimizer = actor_optimizer
         self.critic_optimizer = critic_optimizer
         self.mse_loss = torch.nn.MSELoss()
+        self.grad_norm_clipping = params.grad_norm_clipping
 
         self.sequence_length = params.sequence_length
+        self.rollout_length = params.rollout_length
         self.device = params.device
 
         # Initialize sequential buffers as tensors
@@ -65,39 +64,63 @@ class PPO:
         self.pproprioception_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
         self.action_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
 
+    def set_env(self, env):
+        self.env = env
+
     def update_seq_buffer(self, buffer, new_data):
         return torch.cat((buffer[:, 1:, :], new_data.unsqueeze(1) ), dim=1)
+    
+    def clear_seq_buffer(self):
+        self.vision_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
+        self.pproprioception_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
+        self.action_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
 
     def compute_rtgs(self, reward_batch):
         rtgs_batch = torch.zeros_like(reward_batch)
         # Start from the last time step
         rtgs_batch[:, -1] = reward_batch[:, -1]
         # Calculate rewards-to-go by iterating backwards from second last to first timestep
-        for t in reversed(range(reward_batch.size(1) - 1)):  # reward_batch.size(1) is sequence_length
+        for t in reversed(range(reward_batch.size(1) - 1)):  # reward_batch.size(1) is rollout_len
             rtgs_batch[:, t] = reward_batch[:, t] + self.gamma * rtgs_batch[:, t + 1]
 
         return rtgs_batch
     
-    def rollout_storage(self):
+    def rollout_storage(self, goal):
 
         # roll-out storage
-        vision_batch = torch.zeros([1, self.sequence_length, *params.vision_dim], dtype=torch.float32, device=self.device)
-        proprioception_batch = torch.zeros([1, self.sequence_length, params.proprioception_dim], dtype=torch.float32, device=self.device)
-        action_batch = torch.zeros([1, self.sequence_length, params.action_dim], dtype=torch.float32, device=self.device)
-        action_log_prob_batch = torch.zeros([1, self.sequence_length], dtype=torch.float32, device=self.device)
-        reward_batch = torch.zeros([1, self.sequence_length], dtype=torch.float32, device=self.device)
-        done_batch = torch.zeros([1, self.sequence_length], dtype=torch.float32, device=self.device)
+        vision_batch = torch.zeros([1, self.rollout_length, *params.vision_dim], dtype=torch.float32, device=self.device)
+        proprioception_batch = torch.zeros([1, self.rollout_length, params.proprioception_dim], dtype=torch.float32, device=self.device)
+        action_batch = torch.zeros([1, self.rollout_length, params.action_dim], dtype=torch.float32, device=self.device)
+        action_log_prob_batch = torch.zeros([1, self.rollout_length], dtype=torch.float32, device=self.device)
+        reward_batch = torch.zeros([1, self.rollout_length], dtype=torch.float32, device=self.device)
+        done_batch = torch.zeros([1, self.rollout_length], dtype=torch.float32, device=self.device)
 
-        for i in range(self.sequence_length):
+        observation, _ = self.env.reset()
+        vision, proprioception = convert_observation(observation)
 
-            action = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer)
-            next_observation, reward, done, truncated, info = self.env.step(action)
-            vision, proprioception = convert_observation(next_observation)
+        # Add batch dimension
+        proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
+        vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
 
+        self.clear_seq_buffer()
+        for i in range(self.rollout_length):
+    
             vision_embedded = self.embedding.vision_embed(vision)
             proprioception_embedded = self.embedding.proprioception_embed(proprioception)
+            goal_embedded = self.embedding.vision_embed(goal)
+
             self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
             self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
+            
+            latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
+            action, _ = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded)
+
+            observation, reward, done, truncated, info = self.env.step(action[0].detach().cpu().numpy())
+            vision, proprioception = convert_observation(observation)
+
+            # Add batch dimension
+            proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
+            vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
 
             vision_batch[0, i] = vision
             proprioception_batch[0, i] = proprioception
@@ -120,22 +143,27 @@ class PPO:
         action_embedded = self.embedding.action_embed(action)
         goal_embedded = self.embedding.vision_embed(goal)
 
+        self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
+        self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
+        
         latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
+        _, action_log_prob = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded)
 
-        value = self.critic(vision_embedded, proprioception_embedded, action_embedded, goal_embedded)
-        _, action_log_prob = self.actor(vision_embedded, proprioception_embedded, latent, goal_embedded)
+        value = self.critic(vision_embedded, proprioception_embedded, action_embedded)
 
         return value, action_log_prob
 
     def update_model(self, goal):
-        vision_batch, proprioception_batch, action_batch, action_log_prob_batch, reward_batch, rtgs_batch, done_batch = self.rollout_storage()
+        vision_batch, proprioception_batch, action_batch, action_log_prob_batch, reward_batch, rtgs_batch, done_batch = self.rollout_storage(goal)
 
         goal = goal.repeat(vision_batch.shape[0], 1, 1, 1)  
 
         actor_losses, critic_losses = 0, 0
-        for i in range(self.sequence_length):
 
-            value, action_log_prob = self.evlaue(vision_batch[:, i, :, :, :], proprioception_batch[:, i, :], action_batch[:, i, :], goal)
+        self.clear_seq_buffer()
+        for i in range(self.rollout_length):
+
+            value, action_log_prob = self.evaluate(vision_batch[:, i, :, :, :], proprioception_batch[:, i, :], action_batch[:, i, :], goal)
 
             ratio = torch.exp(action_log_prob - action_log_prob_batch[:, i])
             advantage = rtgs_batch[:, i] - value
@@ -144,22 +172,26 @@ class PPO:
             surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * advantage
             actor_losses += -torch.min(surr1, surr2)
-            critic_losses += self.mse_loss()(value, rtgs_batch[:, i])
+            critic_losses += self.mse_loss(value, rtgs_batch[:, i])
 
+        actor_loss = actor_losses / self.rollout_length
+        critic_loss = critic_losses / self.rollout_length
+
+        print(actor_loss, critic_loss)
 
         # train critic
         self.critic_optimizer.zero_grad()
-        critic_losses.backward(retain_graph=True)
+        critic_loss.backward()
         clip_grad_norm_(self.critic.parameters(), max_norm=self.grad_norm_clipping)
         self.critic_optimizer.step()
 
         # train actor
         self.actor_optimizer.zero_grad()
-        actor_losses.backward()
+        actor_loss.backward()
         clip_grad_norm_(self.actor.parameters(), max_norm=self.grad_norm_clipping)
         self.actor_optimizer.step()
 
-        return actor_losses.item(), critic_losses.item()
+        return actor_loss.item(), critic_loss.item()
 
 class TargetRL:
     def __init__(self, embedding: nn.Module, plan_proposal: nn.Module, actor: nn.Module, critic: nn.Module, target_actor: nn.Module, 
@@ -203,7 +235,7 @@ class TargetRL:
 
         self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
         self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
-        next_action = self.target_actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
+        next_action, _ = self.target_actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
 
         next_action_embedded = self.embedding.action_embed(next_action)
         self.action_buffer = self.update_seq_buffer(self.action_buffer, next_action_embedded)
