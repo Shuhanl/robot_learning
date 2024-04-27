@@ -147,7 +147,9 @@ class PPO:
         self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
         
         latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
-        _, action_log_prob = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded)
+        action, action_log_prob = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded, self.action_buffer)
+        action_embedded = self.embedding.action_embed(action)
+        self.action_buffer = self.update_seq_buffer(self.action_buffer, action_embedded)
 
         value = self.critic(vision_embedded, proprioception_embedded, action_embedded)
 
@@ -235,7 +237,7 @@ class TargetRL:
 
         self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
         self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
-        next_action, _ = self.target_actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
+        next_action, _ = self.target_actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded, self.action_buffer)
 
         next_action_embedded = self.embedding.action_embed(next_action)
         self.action_buffer = self.update_seq_buffer(self.action_buffer, next_action_embedded)

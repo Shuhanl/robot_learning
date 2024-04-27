@@ -1,9 +1,7 @@
 import torch
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
-
-from transformer_model import EmbeddingNetwork, PlanRecognitionTransformer, PlanProposal, DirectActorTransformer, Critic
-from prioritized_replay_buffer_sequence import PrioritizedReplayBuffer
+from transformer_model import EmbeddingNetwork, PlanRecognition, PlanProposal, Actor, Critic
 from noise import OrnsteinUhlenbeckProcess
 from utils import compute_regularisation_loss
 import parameters as params
@@ -15,38 +13,35 @@ class AgentTrainer():
     self.device = params.device
     self.action_dim = params.action_dim
     self.batch_size = params.batch_size
-    self.batch_size = params.batch_size
     self.grad_norm_clipping = params.grad_norm_clipping
     self.goal_embeded = None
     self.sequence_length = params.sequence_length
 
     print(self.device)
 
-    self.plan_recognition = PlanRecognitionTransformer()
+    self.plan_recognition = PlanRecognition()
     self.plan_proposal = PlanProposal()
     self.embedding = EmbeddingNetwork()
     self.embedding_optimizer = optim.Adam(self.embedding.parameters(), lr=self.lr)
     self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
     self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
 
-    self.actor = DirectActorTransformer()
-    self.target_actor = DirectActorTransformer()
+    self.actor = Actor()
+    self.target_actor = Actor()
+    self.target_actor.load_state_dict(self.actor.state_dict())
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
     self.critic = Critic()
     self.target_critic = Critic()
+    self.target_critic.load_state_dict(self.critic.state_dict())
     self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=self.lr)
 
-    self.pri_buffer = PrioritizedReplayBuffer(alpha=0.6, beta=0.4)
     self.noise = OrnsteinUhlenbeckProcess(size=self.action_dim)
     self.mse_loss = torch.nn.MSELoss()
     self.tau = params.tau
     self.beta = params.beta
 
     # Initialize buffers as tensors
-    self.latent_buffer = torch.empty(
-        (1, self.sequence_length, params.latent_dim)).to(self.device)
-    self.action_buffer = torch.empty(
-        (1, self.sequence_length, params.d_model)).to(self.device)
+    self.action_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
     
     # self.train_latent_buffer = torch.empty(
     #     (self.batch_size, self.sequence_length, params.latent_dim)).to(self.device)
@@ -91,41 +86,35 @@ class AgentTrainer():
     proprioception = torch.FloatTensor(proprioception).to(self.device)
 
     sequence_length = video.shape[1]
-    video_embedded = torch.stack([self.embedding.vision_embed(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
+    vision_embedded = torch.stack([self.embedding.vision_embed(video[:, i, :, :, :]) for i in range(sequence_length)], dim=1)
     proprioception_embedded = self.embedding.proprioception_embed(proprioception)
-    position = torch.arange(video_embedded.shape[1], device=self.device).expand((self.batch_size, video_embedded.shape[1])).contiguous()
-    position_embedded = self.embedding.position_embed(position)
 
-    goal_embedded = video_embedded[:, -1, :]
+    goal_embedded = vision_embedded[:, -1, :]
+
+    action_buffer = torch.empty((self.batch_size, self.sequence_length, params.d_model)).to(self.device)
 
     """ Combine CNN output with proprioception data """
-    recognition_dist = self.plan_recognition(video_embedded, proprioception_embedded, position_embedded)
-
-    # Initialize buffers as tensors
-    latent_buffer = torch.empty(
-        (self.batch_size, 0, params.latent_dim)).to(self.device)
-    action_buffer = torch.empty(
-        (self.batch_size, 0, params.d_model)).to(self.device)
+    recognition_dist = self.plan_recognition(vision_embedded, proprioception_embedded)
     
     """ Compute the loss for batches sequence of data """
     kl_loss, normal_kl_loss, recon_loss = 0, 0, 0
     for i in range(sequence_length):
-      proposal_dist = self.plan_proposal(video_embedded[:, i, :], proprioception_embedded[:, i, :], goal_embedded)
+      proposal_dist = self.plan_proposal(vision_embedded[:, i, :], proprioception_embedded[:, i, :], goal_embedded)
 
       kl_loss += compute_regularisation_loss(recognition_dist, proposal_dist)
       
-      normal_kl_loss += torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - 
-                                                 proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
+      normal_kl_loss += torch.mean(-0.5 * torch.sum(1 + proposal_dist.scale**2 - proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
-      proposal_latent = proposal_dist.sample()
-      latent_buffer = torch.cat([latent_buffer, proposal_latent.unsqueeze(1)], dim=1)
+      latent = proposal_dist.sample()
       """ Prepend the goal to let the network attend to it """
       
-      pred_action = self.actor.get_action(video_embedded[:, :i, :], proprioception_embedded[:, :i, :], latent_buffer, goal_embedded, action_buffer, position_embedded)
-      action_embedded= self.embedding.action_embed(pred_action)
-      action_buffer = torch.cat([action_buffer, action_embedded.unsqueeze(1)], dim=1)
+      action, _ = self.actor.get_action(vision_embedded[:, :i, :], proprioception_embedded[:, :i, :], latent, goal_embedded, action_buffer)
 
-      recon_loss += self.mse_loss(action_labels[:, i, :], pred_action)
+      action_embedded= self.embedding.action_embed(action)
+    
+      action_buffer = self.update_buffer(action_buffer, action_embedded)
+
+      recon_loss += self.mse_loss(action_labels[:, i, :], action)
 
     # Compute the batch loss
     loss = self.beta*(kl_loss + normal_kl_loss) + recon_loss / sequence_length
@@ -154,6 +143,11 @@ class AgentTrainer():
 
   def get_action(self, vision, proprioception, greedy=True):
 
+    self.embedding.eval()
+    self.plan_recognition.eval()
+    self.plan_proposal.eval()
+    self.actor.eval()
+
     with torch.no_grad():
       proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
       vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
@@ -163,30 +157,25 @@ class AgentTrainer():
       proprioception_embedded = proprioception_embedded.unsqueeze(0)
 
       proposal_dist = self.plan_proposal(vision_embeded[:, 0, :], proprioception_embedded[:, 0, :], self.goal_embeded)
-      proposal_latent = proposal_dist.sample()
-      self.latent_buffer = self.update_buffer(self.latent_buffer, proposal_latent)
+      latent = proposal_dist.sample()
 
-      position = torch.arange(self.latent_buffer.shape[1], device=self.device).expand((1, self.latent_buffer.shape[1])).contiguous()
-      position_embedded = self.embedding.position_embed(position)
-
-      action = self.actor.get_action(vision_embeded, proprioception_embedded, self.action_buffer, self.goal_embeded, self.action_buffer, position_embedded)
+      action = self.actor.get_action(vision_embeded, proprioception_embedded, latent, self.goal_embeded, self.action_buffer)
       action_embedded= self.embedding.action_embed(action)
       self.action_buffer = self.update_buffer(self.action_buffer, action_embedded)
 
-      if not greedy:
-          action += torch.tensor(self.noise.sample(),dtype=torch.float).to(self.device)
-
       action = action.detach().cpu().numpy()
+      if not greedy:
+        action += self.noise.sample()
+
       return action[0]
     
   def _get_next_action(self, vision_embedded, proprioception_embedded, greedy=True):
     
     with torch.no_grad():
       proposal_dist = self.plan_proposal(vision_embedded, proprioception_embedded, self.goal_embeded)
-      proposal_latent = proposal_dist.sample()
-      self.latent_buffer = self.update_buffer(self.latent_buffer, proposal_latent)
+      latent = proposal_dist.sample()
 
-      next_action = self.target_actor.get_action(vision_embedded, proprioception_embedded, proposal_latent, self.goal_embeded)
+      next_action = self.target_actor.get_action(vision_embedded, proprioception_embedded, latent, self.goal_embeded)
       next_action_embedded= self.embedding.action_embed(next_action)
       self.action_buffer = self.update_buffer(self.action_buffer, next_action_embedded)
 

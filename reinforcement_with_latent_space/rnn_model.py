@@ -136,8 +136,12 @@ class PlanRecognition(nn.Module):
         super(PlanRecognition, self).__init__()
         self.layer_size = 2048
         self.epsilon = 1e-4
-        self.in_dim = 2*params.d_model
+        self.d_model = params.d_model
+        self.in_dim = params.d_model
         self.latent_dim = params.latent_dim
+        self.sequence_length = params.sequence_length
+        self.batch_size = params.batch_size
+        self.device = params.device
 
         # Encoder Layers
         self.lstm1 = nn.LSTM(self.in_dim, self.layer_size,
@@ -156,9 +160,20 @@ class PlanRecognition(nn.Module):
         dist = Normal(loc=mu, scale=sigma)
         return dist
 
-    def forward(self, video_embedded, proprioception_embedded):
+    def forward(self, vision_embedded, proprioception_embedded):
 
-        x = torch.cat([video_embedded, proprioception_embedded], dim=-1)  # (bs, seq_length, 2*d_model)
+        vision_embedded = vision_embedded[:, -self.sequence_length:, :]
+        proprioception_embedded = proprioception_embedded[:, -self.sequence_length:, :]
+
+        # pad all tokens to sequence length
+        vision_embedded = torch.cat([torch.zeros((vision_embedded.shape[0], self.sequence_length -
+                                    vision_embedded.shape[1], self.d_model), device=self.device), vision_embedded], dim=1)
+        proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
+                                            proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
+        
+        x = torch.stack((vision_embedded, proprioception_embedded), dim=1           
+        ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)     # (bs, 2*seq_len, d_model)  
+
         # LSTM Layers
         x, _ = self.lstm1(x)
         x, _ = self.lstm2(x)
@@ -274,12 +289,12 @@ class Actor(nn.Module):
         self.lstm2 = nn.LSTM(input_size=layer_size,
                              hidden_size=layer_size, batch_first=True)
 
+        # self.fc = nn.Sequential(
+        #     nn.Linear(layer_size, self.action_dim), nn.Tanh())
+        
         self.alpha = nn.Linear(layer_size, self.action_dim * self.num_distribs)
         self.mu = nn.Linear(layer_size, self.action_dim * self.num_distribs)
         self.sigma = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-
-        # self.fc = nn.Sequential(
-        #     nn.Linear(layer_size, self.action_dim), nn.Tanh())
         
         init_lstm(self.lstm1)
         init_lstm(self.lstm2)
@@ -291,7 +306,10 @@ class Actor(nn.Module):
 
         # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ... latent, goal)
         # which works nice in an autoregressive sense since states predict actions
-        x = torch.cat([vision_embedded, proprioception_embedded, latent, goal_embedded], dim=1)  # (bs, 2*seq_len+2, d_model)
+        x = torch.stack((vision_embedded, proprioception_embedded), dim=1           
+        ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)          
+        x = torch.cat([x,  latent, goal_embedded], dim=1)  # (bs, 2*seq_len+2, d_model)
+
         x, _ = self.lstm1(x)
         # print('first lstm', x)
         x, _ = self.lstm2(x)
@@ -305,7 +323,7 @@ class Actor(nn.Module):
 
         return logistic_mixture
 
-    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
+    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded):
         """
         Get the action for the current state
         """

@@ -1,11 +1,26 @@
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.nn.functional as F
 from torch.distributions import Normal
 from torch.distributions import Categorical, Distribution, AffineTransform, TransformedDistribution, SigmoidTransform
 from torch.distributions.mixture_same_family import MixtureSameFamily
 from torch.distributions.uniform import Uniform
 import parameters as params
+
+
+def init_linear(module):
+    """
+    Initialize linear layers with Xavier uniform initialization and set biases to a small constant.
+    This function now handles Sequential modules containing linear layers.
+    """
+    if isinstance(module, nn.Linear):  # Check if the module is a linear layer
+        init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            module.bias.data.fill_(0.01)  # Small constant to avoid dead neurons
+    elif isinstance(module, nn.Sequential):  # Check if it's a Sequential module
+        for sub_module in module:
+            init_linear(sub_module)  # Recursively apply to sub-modules
 
 
 class VisionNetwork(nn.Module):
@@ -81,11 +96,12 @@ class EmbeddingNetwork(nn.Module):
         self.sequence_length = params.sequence_length
 
         self.vision_embedding = VisionNetwork()
-        self.proprioception_embedding = torch.nn.Linear(
-            self.proprioception_dim, self.d_model)
+        self.proprioception_embedding = torch.nn.Linear(self.proprioception_dim, self.d_model)
         self.action_embedding = torch.nn.Linear(self.action_dim, self.d_model)
-        self.position_embedding = nn.Embedding(
-            self.sequence_length, self.d_model)
+        self.position_embedding = nn.Embedding(self.sequence_length, self.d_model)
+
+        init_linear(self.proprioception_embedding)
+        init_linear(self.action_embedding)  
 
     def vision_embed(self, x):
         return self.vision_embedding(x)
@@ -99,9 +115,9 @@ class EmbeddingNetwork(nn.Module):
     def position_embed(self, x):
         return self.position_embedding(x)
 
-class PlanRecognitionTransformer(nn.Module):
+class PlanRecognition(nn.Module):
     def __init__(self):
-        super(PlanRecognitionTransformer, self).__init__()
+        super(PlanRecognition, self).__init__()
         self.layer_size = 2048
         self.nhead = params.n_heads
         self.epsilon = 1e-4
@@ -111,30 +127,53 @@ class PlanRecognitionTransformer(nn.Module):
         self.d_model = params.d_model
         self.batch_size = params.batch_size
         self.device = params.device
+        self.embedding = EmbeddingNetwork()
 
         # Define the Transformer encoder layer (self-attention on the same sensor embedding sequence)
-        encoder_layers = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=self.nhead, dim_feedforward=self.layer_size, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers=1)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=self.d_model, nhead=self.nhead, dim_feedforward=self.layer_size, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=1)
 
         # Linear layers for the latent variables
         self.fc_mu = nn.Linear(self.d_model, self.latent_dim)
         self.fc_sigma = nn.Linear(self.d_model, self.latent_dim)
 
+        for p in self.transformer_encoder.parameters():
+            if p.dim() > 1:
+                init.xavier_uniform_(p)  # Xavier initialization for weight matrices
+            else:
+                init.constant_(p, 0)  # Zero initialization for biases
+        
+        init_linear(self.fc_mu)
+        init_linear(self.fc_sigma)
+
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
         return dist
 
-    def forward(self, video_embedded, proprioception_embedded, position_embedded):
+    def forward(self, vision_embedded, proprioception_embedded):
 
+        vision_embedded = vision_embedded[:, -self.sequence_length:, :]
+        proprioception_embedded = proprioception_embedded[:, -self.sequence_length:, :]
+
+        position = torch.arange(vision_embedded.shape[1], device=self.device).expand((self.batch_size, vision_embedded.shape[1])).contiguous()
+        position_embedded = self.embedding.position_embed(position)
+
+        # pad all tokens to sequence length
+        vision_embedded = torch.cat([torch.zeros((vision_embedded.shape[0], self.sequence_length -
+                                    vision_embedded.shape[1], self.d_model), device=self.device), vision_embedded], dim=1)
+        proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
+                                            proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
+        position_embedded = torch.cat([torch.zeros((position_embedded.shape[0], self.sequence_length -
+                                      position_embedded.shape[1], self.d_model), device=self.device), position_embedded], dim=1)
+        
         # Add position embeddings
-        video_embedded += position_embedded
+        vision_embedded += position_embedded
         proprioception_embedded += position_embedded
 
-        # this makes the sequence look like (video_1, pro_1, a_1, video_2, pro_2, a_2, ...)
-        # which works nice in an autoregressive sense since states predict actions
-        x = torch.cat((video_embedded, proprioception_embedded), dim=1)
+        # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ...)
+        # which works nice in an autoregressive sense 
+        x = torch.stack((vision_embedded, proprioception_embedded), dim=1
+        ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)  # (bs, 2*seq_len, d_model)
 
         # Encoder
         x = self.transformer_encoder(x)
@@ -169,6 +208,10 @@ class PlanProposal(nn.Module):
         self.fc_mu = nn.Linear(self.layer_size, self.latent_dim)
         self.fc_sigma = nn.Linear(self.layer_size, self.latent_dim)
 
+        init_linear(self.fc)
+        init_linear(self.fc_mu)
+        init_linear(self.fc_sigma)
+
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
         return dist
@@ -186,7 +229,7 @@ class PlanProposal(nn.Module):
 
 
 class LogisticMixture(Distribution):
-    def __init__(self, weightings, mu, scale, qbits):
+    def __init__(self, weightings, mu, scale, qbits=None):
         """
         Initializes the logistic mixture model.
         :param weightings: The logits for the categorical distribution.
@@ -228,140 +271,121 @@ class LogisticMixture(Distribution):
         log_prob = self.mixture_dist.log_prob(value)
         return log_prob
 
-
-class LogisticActor(nn.Module):
-    def __init__(self, layer_size=1024, epsilon=1e-4):
-        super(LogisticActor, self).__init__()
-        self.epsilon = epsilon
-        self.in_dim = 3*params.d_model + params.latent_dim
-        self.action_dim = params.action_dim
-        self.num_distribs = params.num_distribs
-        self.device = params.device
-        self.qbits = params.qbits
-
-        self.lstm1 = nn.LSTM(input_size=self.in_dim,
-                             hidden_size=layer_size, batch_first=True)
-        self.lstm2 = nn.LSTM(input_size=layer_size,
-                             hidden_size=layer_size, batch_first=True)
-
-        self.alpha = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-        self.mu = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-        self.sigma = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-
-    def forward(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
-
-        x = torch.cat([vision_embedded, proprioception_embedded,
-                      latent, goal_embedded], dim=-1)
-
-        x, _ = self.lstm1(x)
-        x, _ = self.lstm2(x)
-
-        weightings = self.alpha(x).view(-1, self.action_dim, self.num_distribs)
-        mu = self.mu(x).view(-1, self.action_dim, self.num_distribs)
-        scale = torch.nn.functional.softplus(self.sigma(
-            x + self.epsilon)).view(-1, self.action_dim, self.num_distribs)
-        logistic_mixture = LogisticMixture(weightings, mu, scale, self.qbits)
-
-        return logistic_mixture
-
-
-class DirectActorTransformer(nn.Module):
+class Actor(nn.Module):
     def __init__(
         self,
         layer_size=1024,
     ):
-        super(DirectActorTransformer, self).__init__()
+        super(Actor, self).__init__()
         self.sequence_length = params.sequence_length
         self.nhead = params.n_heads
         self.latent_dim = params.latent_dim
         self.d_model = params.d_model
         self.action_dim = params.action_dim
+        self.num_distribs = params.num_distribs
         self.device = params.device
         self.batch_size = params.batch_size
+        self.epsilon = params.epsilon
+        self.embedding = EmbeddingNetwork()
 
         # Transformer Encoder Layer for self-attention on the same embedding sequence
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=self.nhead, dim_feedforward=layer_size, batch_first=True
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=1)
-
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=self.d_model, num_heads=self.nhead, batch_first=True)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=self.d_model, nhead=self.nhead, dim_feedforward=layer_size, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
 
         # Transformer Decoder Layer for cross-attention on different embedding sequences
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=self.d_model, nhead=self.nhead, dim_feedforward=layer_size, batch_first=True
-        )
-        self.transformer_decoder = nn.TransformerDecoder(
-            decoder_layer, num_layers=1)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=self.d_model, nhead=self.nhead, dim_feedforward=layer_size, batch_first=True)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=1)
 
-        # Output fully connected layer
-        self.fc = nn.Sequential(
-            nn.Linear(self.d_model, self.action_dim), nn.Tanh())
+        # self.fc = nn.Sequential(
+        #     nn.Linear(self.d_model, self.action_dim), nn.Tanh())
 
-    def causal_mask(self, x):
+        self.alpha = nn.Linear(self.d_model, self.action_dim * self.num_distribs)
+        self.mu = nn.Linear(self.d_model, self.action_dim * self.num_distribs)
+        self.sigma = nn.Linear(self.d_model, self.action_dim * self.num_distribs)
+
+        # Initialize transformer encoder and decoder weights
+        for module in [self.transformer_encoder, self.transformer_decoder]:
+            for p in module.parameters():
+                if p.dim() > 1:
+                    init.xavier_uniform_(p)  # Xavier initialization for weight matrices
+                else:
+                    init.constant_(p, 0)  # Zero initialization for biases      
+
+        init_linear(self.alpha)
+        init_linear(self.mu)
+        init_linear(self.sigma)
+
+    def causal_mask(self, size):
         """
         Create a causal mask to prevent positions from attending to future positions.
         """
-        N, T, _ = x.shape  # Batch size (N), Sequence length (T)
-        mask = torch.triu(torch.full((T, T), float('-inf'), device=self.device), diagonal=1)
-        mask = mask.repeat(N * self.nhead, 1, 1)  # Adjusting for num_heads and batch_size
+        mask = torch.triu(torch.ones(size, size, device=self.device), diagonal=1).bool()
         return mask
 
     def forward(self, vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded, position_embedded):
 
-        casual_mask = self.causal_mask(action_embedded)
+        sequence_length = vision_embedded.size(1)
+        mask = self.causal_mask(sequence_length)
 
         vision_embedded += position_embedded
         proprioception_embedded += position_embedded
         action_embedded += position_embedded
-
+        
         # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ... goal)
         # which works nice in an autoregressive sense since states predict actions
 
-        x = torch.cat(
-            (vision_embedded, proprioception_embedded, goal_embedded), dim=1)  # (bs, 2*seq_len+1, d_model)
+        x = torch.stack((vision_embedded, proprioception_embedded), dim=1
+        ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)  # (bs, 2*seq_len, d_model)
 
-        x = self.transformer_encoder(x)  # (bs, 2*seq_len+1, d_model)
-        x, _ = self.cross_attention(x, latent, latent)  # (bs, 2*seq_len+1, d_model)
-        x = self.transformer_decoder(action_embedded, x, tgt_mask=casual_mask) # (bs, seq_len, d_model)
+        x = torch.cat((x, latent, goal_embedded), dim=1)  # (bs, 2*seq_len+2, d_model)
+
+        x = self.transformer_encoder(x)  # (bs, 2*seq_len+2, d_model)
+
+        # x = self.transformer_decoder(action_embedded, x, tgt_mask=mask) # (bs, seq_len, d_model)
+
+        # print("NaN in x:", torch.isnan(x).any())
 
         # Use the last decoder output for generating the action
-        x = x[:, -1, :]
+        x = x[:, -1, :]  # (bs, d_model)
 
-        action = self.fc(x)
+        weightings = self.alpha(x).view(-1, self.action_dim, self.num_distribs)
+        mu = self.mu(x).view(-1, self.action_dim, self.num_distribs)
+        scale = nn.functional.softplus(self.sigma(x)+self.epsilon).view(-1, self.action_dim, self.num_distribs)
+        logistic_mixture = LogisticMixture(weightings, mu, scale)
 
-        return action
+        return logistic_mixture
 
-    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded, position_embedded):
+    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded):
         """
         Get the action for the current state
         """
 
         vision_embedded = vision_embedded[:, -self.sequence_length:, :]
         proprioception_embedded = proprioception_embedded[:, -self.sequence_length:, :]
-        latent = latent[:, -self.sequence_length:, :]
         action_embedded = action_embedded[:, -self.sequence_length:, :]
+        latent = latent.unsqueeze(1)
         goal_embedded = goal_embedded.unsqueeze(1)
+
+        position = torch.arange(vision_embedded.shape[1], device=self.device).expand((1, vision_embedded.shape[1])).contiguous()
+        position_embedded = self.embedding.position_embed(position)
 
         # pad all tokens to sequence length
         vision_embedded = torch.cat([torch.zeros((vision_embedded.shape[0], self.sequence_length -
                                     vision_embedded.shape[1], self.d_model), device=self.device), vision_embedded], dim=1)
         proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
                                             proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
-        latent = torch.cat([torch.zeros((latent.shape[0], self.sequence_length -
-                           latent.shape[1], self.latent_dim), device=self.device), latent], dim=1)
         action_embedded = torch.cat([torch.zeros((action_embedded.shape[0], self.sequence_length -
                                     action_embedded.shape[1], self.d_model), device=self.device), action_embedded], dim=1)
 
         position_embedded = torch.cat([torch.zeros((position_embedded.shape[0], self.sequence_length -
                                       position_embedded.shape[1], self.d_model), device=self.device), position_embedded], dim=1)
 
-        action = self.forward(
-            vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded, position_embedded)
+        logistic_mixture = self.forward(vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded, position_embedded)
 
-        return action
+        action = logistic_mixture.sample()
+        action_log_prob = logistic_mixture.log_prob(action)
+
+        return action, action_log_prob
 
 
 class Critic(nn.Module):
