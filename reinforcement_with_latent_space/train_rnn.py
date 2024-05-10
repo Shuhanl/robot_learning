@@ -2,7 +2,7 @@ import torch
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
-from rnn_model import EmbeddingNetwork, PlanRecognition, PlanProposal, DirectActor, Critic
+from rnn_model import EmbeddingNetwork, PlanRecognition, PlanProposal, Actor, Critic
 from rl import PPO, TargetRL
 from noise import OrnsteinUhlenbeckProcess
 from utils import compute_regularisation_loss
@@ -26,8 +26,8 @@ class AgentTrainer():
     self.plan_recognition_optimizer = optim.Adam(self.plan_recognition.parameters(), lr=self.lr)  
     self.plan_proposal_optimizer = optim.Adam(self.plan_proposal.parameters(), lr=self.lr)  
 
-    self.actor = DirectActor()
-    self.target_actor = DirectActor()
+    self.actor = Actor()
+    self.target_actor = Actor()
     self.target_actor.load_state_dict(self.actor.state_dict())
     self.actor_optimizer = optim.Adam(self.actor.parameters(),lr=self.lr)
     self.critic = Critic()
@@ -40,12 +40,12 @@ class AgentTrainer():
     self.tau = params.tau
     self.beta = params.beta
     self.sequence_length = params.sequence_length
+    self.d_model = params.d_model
 
     # Initialize buffers as tensors
-    self.vision_buffer = torch.empty(
-        (1, self.sequence_length, params.d_model)).to(self.device)
-    self.pproprioception_buffer = torch.empty(
-        (1, self.sequence_length, params.d_model)).to(self.device)
+    self.vision_buffer = torch.empty((1, self.sequence_length, self.d_model)).to(self.device)
+    self.pproprioception_buffer = torch.empty((1, self.sequence_length, self.d_model)).to(self.device)
+    self.action_buffer = torch.empty(1, self.sequence_length, self.d_model).to(self.device)
 
     """ Wrap your models with DataParallel """
     if torch.cuda.device_count() > 1:
@@ -67,16 +67,15 @@ class AgentTrainer():
       self.target_actor = self.target_actor.to(self.device)
       self.target_critic = self.target_critic.to(self.device)
   
-    # ppo = PPO(
-    #     actor_network=self.actor,
-    #     critic_network=self.critic,
+    # self.ppo = PPO(embedding=self.embedding, plan_proposal=self.plan_proposal,
+    #     actor=self.actor,
+    #     critic=self.critic,
     #     actor_optimizer=self.actor_optimizer,
     #     critic_optimizer=self.critic_optimizer,
     #     gamma = params.gamma,
     #     tau = params.tau,
-    #     epsilon = params.epsilon,
-    #     entropy_weight = params.entropy_weight)
-    
+    #     epsilon = params.epsilon)
+
     self.target_rl = TargetRL(embedding=self.embedding, plan_proposal=self.plan_proposal, 
               actor=self.actor,
               critic=self.critic,
@@ -85,16 +84,15 @@ class AgentTrainer():
               actor_optimizer=self.actor_optimizer,
               critic_optimizer=self.critic_optimizer, gamma = params.target_gamma, target_tau=params.target_tau)
 
-
-  def update_buffer(self, buffer, new_data):
-
-      return torch.cat((buffer[:, 1:, :], new_data.unsqueeze(1) ), dim=1)
-  
   def set_goal(self, goal):
     self.embedding.eval()
     goal = torch.FloatTensor(goal).to(self.device)
     self.goal = goal.unsqueeze(0)
     # self.goal_embedded = self.embedding.vision_embed(goal)
+
+  def update_buffer(self, buffer, new_data):
+
+      return torch.cat((buffer[:, 1:, :], new_data.unsqueeze(1) ), dim=1)
 
   def get_action(self, vision, proprioception, greedy=True):
 
@@ -104,8 +102,8 @@ class AgentTrainer():
     self.actor.eval()
     
     with torch.no_grad():
-      proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
-      vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
+      proprioception = torch.FloatTensor(proprioception).to(self.device)
+      vision = torch.FloatTensor(vision).to(self.device)
 
       vision_embedded = self.embedding.vision_embed(vision)
       proprioception_embedded = self.embedding.proprioception_embed(proprioception)
@@ -114,10 +112,12 @@ class AgentTrainer():
       self.vision_buffer = self.update_buffer(self.vision_buffer, vision_embedded)
       self.pproprioception_buffer = self.update_buffer(self.pproprioception_buffer, proprioception_embedded)
 
-      proposal_dist = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded)
-      proposal_latent = proposal_dist.sample()
+      latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
 
-      action = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded)
+      action, _ = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded, self.action_buffer)
+
+      action_embedded= self.embedding.action_embed(action)
+      self.action_buffer = self.update_buffer(self.action_buffer, action_embedded)
       
       action = action.detach().cpu().numpy()
       if not greedy:
@@ -145,6 +145,7 @@ class AgentTrainer():
     recognition_dist = self.plan_recognition(video_embedded, proprioception_embedded)
     
     """ Compute the loss for batches sequence of data """
+    action_buffer = torch.empty((self.batch_size, self.sequence_length, self.d_model)).to(self.device)
     kl_loss, normal_kl_loss, recon_loss = 0, 0, 0
     for i in range(sequence_length):
       proposal_dist = self.plan_proposal(video_embedded[:, i, :], proprioception_embedded[:, i, :], goal_embedded)
@@ -155,9 +156,10 @@ class AgentTrainer():
                                                  proposal_dist.loc**2 - torch.exp(proposal_dist.scale**2), dim=1), dim=0)
 
       proposal_latent = proposal_dist.sample()
-      """ Prepend the goal to let the network attend to it """
-      
-      pred_action = self.actor.get_action(video_embedded[:, :i, :], proprioception_embedded[:, :i, :], proposal_latent, goal_embedded)
+      """ Prepend the goal to let the network attend to it """   
+      pred_action, _ = self.actor.get_action(video_embedded[:, :i, :], proprioception_embedded[:, :i, :], proposal_latent, goal_embedded, self.action_buffer)
+      action_embedded= self.embedding.action_embed(pred_action)
+      action_buffer = self.update_buffer(action_buffer, action_embedded)
 
       recon_loss += self.mse_loss(action_labels[:, i, :], pred_action)
 
@@ -190,6 +192,8 @@ class AgentTrainer():
 
     critic_loss, actor_loss = self.target_rl.update_model(self.goal)
     self.target_rl.update_target()
+
+    # critic_loss, actor_loss = self.ppo.update_model(self.goal)
 
     return critic_loss, actor_loss
 

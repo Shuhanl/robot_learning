@@ -15,13 +15,26 @@ def init_lstm(lstm):
             init.xavier_uniform_(param.data)
         elif 'weight_hh' in name:  # Hidden-hidden weights (4 gates)
             init.orthogonal_(param.data)
-        elif 'bias' in name:  # Bias values
+        elif 'bias' in name:  # Bias values for both input-hidden and hidden-hidden
+            # Splitting the bias size equally for forget and other gates
+            # Assuming bias is of shape (4*hidden_size) as typical in LSTMs
+            n = param.size(0)
             param.data.fill_(0)
+            # Specifically initializing the forget gate bias to 1 can sometimes help improve training stability
+            param.data[n//4:n//2].fill_(1.0)
 
-def init_linear(linear):
-    init.xavier_uniform_(linear.weight)
-    if linear.bias is not None:
-        linear.bias.data.fill_(0.01)  # Small constant to avoid dead neurons
+def init_linear(module):
+    """
+    Initialize linear layers with Kaiming (He) uniform initialization and set biases to a small constant.
+    This function now handles Sequential modules containing linear layers.
+    """
+    if isinstance(module, nn.Linear):  # Check if the module is a linear layer
+        init.kaiming_uniform_(module.weight, nonlinearity='relu')  # Use Kaiming initialization
+        if module.bias is not None:
+            module.bias.data.fill_(0.01)  # Small constant to avoid dead neurons
+    elif isinstance(module, nn.Sequential):  # Check if it's a Sequential module
+        for sub_module in module:
+            init_linear(sub_module)  # Recursively apply to sub-modules
 
 
 class VisionNetwork(nn.Module):
@@ -69,16 +82,14 @@ class VisionNetwork(nn.Module):
         image_coords = torch.stack([X, Y], dim=-1).to(self.device)  # [H, W, 2]
 
         image_coords = image_coords.unsqueeze(0)  # [1, H, W, 2]
-        image_coords = image_coords.unsqueeze(
-            0)  # [1, H, W, 2] -> [1, 1, H, W, 2]
+        image_coords = image_coords.unsqueeze(0)  # [1, H, W, 2] -> [1, 1, H, W, 2]
 
         # Reshape softmax for broadcasting
         softmax = softmax.unsqueeze(-1)  # [N, C, H, W, 1]
 
         # Compute spatial soft argmax
         # This tensor represents the 'center of mass' for each channel of each feature map in the batch
-        spatial_soft_argmax = torch.sum(
-            softmax * image_coords, dim=[2, 3])  # [N, C, 2]
+        spatial_soft_argmax = torch.sum(softmax * image_coords, dim=[2, 3])  # [N, C, 2]
         x = nn.Flatten()(spatial_soft_argmax)  # [N, C, 2] -> [N, 2*C]
         return x
 
@@ -98,11 +109,12 @@ class EmbeddingNetwork(nn.Module):
         self.sequence_length = params.sequence_length
 
         self.vision_embedding = VisionNetwork()
-        self.proprioception_embedding = torch.nn.Linear(
-            self.proprioception_dim, self.d_model)
+        self.proprioception_embedding = torch.nn.Linear(self.proprioception_dim, self.d_model)
         self.action_embedding = torch.nn.Linear(self.action_dim, self.d_model)
-        self.position_embedding = nn.Embedding(
-            self.sequence_length, self.d_model)
+        self.position_embedding = nn.Embedding(self.sequence_length, self.d_model)
+        
+        init_linear(self.proprioception_embedding)
+        init_linear(self.action_embedding)  
 
     def vision_embed(self, x):
         return self.vision_embedding(x)
@@ -122,14 +134,16 @@ class PlanRecognition(nn.Module):
         super(PlanRecognition, self).__init__()
         self.layer_size = 2048
         self.epsilon = 1e-4
-        self.in_dim = 2*params.d_model
+        self.d_model = params.d_model
+        self.in_dim = params.d_model
         self.latent_dim = params.latent_dim
+        self.sequence_length = params.sequence_length
+        self.batch_size = params.batch_size
+        self.device = params.device
 
         # Encoder Layers
-        self.lstm1 = nn.LSTM(self.in_dim, self.layer_size,
-                             batch_first=True, bidirectional=True)
-        self.lstm2 = nn.LSTM(2 * self.layer_size, self.layer_size,
-                             batch_first=True, bidirectional=True)
+        self.lstm1 = nn.LSTM(self.in_dim, self.layer_size, batch_first=True, bidirectional=True)
+        self.lstm2 = nn.LSTM(2 * self.layer_size, self.layer_size, batch_first=True, bidirectional=True)
         self.fc_mu = nn.Linear(2 * self.layer_size, self.latent_dim)
         self.fc_sigma = nn.Linear(2 * self.layer_size, self.latent_dim)
 
@@ -142,9 +156,20 @@ class PlanRecognition(nn.Module):
         dist = Normal(loc=mu, scale=sigma)
         return dist
 
-    def forward(self, video_embedded, proprioception_embedded):
+    def forward(self, vision_embedded, proprioception_embedded):
 
-        x = torch.cat([video_embedded, proprioception_embedded], dim=-1)  # (bs, seq_length, 2*d_model)
+        vision_embedded = vision_embedded[:, -self.sequence_length:, :]
+        proprioception_embedded = proprioception_embedded[:, -self.sequence_length:, :]
+
+        # pad all tokens to sequence length
+        vision_embedded = torch.cat([torch.zeros((vision_embedded.shape[0], self.sequence_length -
+                                    vision_embedded.shape[1], self.d_model), device=self.device), vision_embedded], dim=1)
+        proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
+                                            proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
+        
+        x = torch.stack((vision_embedded, proprioception_embedded), dim=1           
+        ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)     # (bs, 2*seq_len, d_model)  
+
         # LSTM Layers
         x, _ = self.lstm1(x)
         x, _ = self.lstm2(x)
@@ -178,6 +203,10 @@ class PlanProposal(nn.Module):
         self.fc_mu = nn.Linear(self.layer_size, self.latent_dim)
         self.fc_sigma = nn.Linear(self.layer_size, self.latent_dim)
 
+        init_linear(self.fc)
+        init_linear(self.fc_mu)
+        init_linear(self.fc_sigma)
+
     def latent_normal(self, mu, sigma):
         dist = Normal(loc=mu, scale=sigma)
         return dist
@@ -194,7 +223,8 @@ class PlanProposal(nn.Module):
 
 
 class LogisticMixture(Distribution):
-    def __init__(self, weightings, mu, scale, qbits):
+    arg_constraints = {}
+    def __init__(self, weightings, mu, scale, qbits=None):
         """
         Initializes the logistic mixture model.
         :param weightings: The logits for the categorical distribution.
@@ -203,7 +233,6 @@ class LogisticMixture(Distribution):
         :param qbits: Number of quantization bits.
         """
         super(LogisticMixture, self).__init__()
-        arg_constraints = {}
 
         # Create a uniform distribution as the base for the logistic transformation
         base_distributions = Uniform(torch.zeros_like(mu), torch.ones_like(mu))
@@ -236,52 +265,19 @@ class LogisticMixture(Distribution):
         log_prob = self.mixture_dist.log_prob(value)
         return log_prob
 
-
-class LogisticActor(nn.Module):
-    def __init__(self, layer_size=1024, epsilon=1e-4):
-        super(LogisticActor, self).__init__()
-        self.epsilon = epsilon
-        self.in_dim = 3*params.d_model + params.latent_dim
-        self.action_dim = params.action_dim
-        self.num_distribs = params.num_distribs
-        self.device = params.device
-        self.qbits = params.qbits
-
-        self.lstm1 = nn.LSTM(input_size=self.in_dim,
-                             hidden_size=layer_size, batch_first=True)
-        self.lstm2 = nn.LSTM(input_size=layer_size,
-                             hidden_size=layer_size, batch_first=True)
-
-        self.alpha = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-        self.mu = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-        self.sigma = nn.Linear(layer_size, self.action_dim * self.num_distribs)
-
-    def forward(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
-
-        x = torch.cat([vision_embedded, proprioception_embedded,
-                      latent, goal_embedded], dim=-1)
-
-        x, _ = self.lstm1(x)
-        x, _ = self.lstm2(x)
-
-        weightings = self.alpha(x).view(-1, self.action_dim, self.num_distribs)
-        mu = self.mu(x).view(-1, self.action_dim, self.num_distribs)
-        scale = nn.functional.softplus(self.sigma(x)+self.epsilon).view(-1, self.action_dim, self.num_distribs)
-        logistic_mixture = LogisticMixture(weightings, mu, scale, self.qbits)
-
-        return logistic_mixture
-
-
-class DirectActor(nn.Module):
+class Actor(nn.Module):
     def __init__(
         self,
-        layer_size=1024
+        layer_size=1024,
+        epsilon=1e-4
     ):
-        super(DirectActor, self).__init__()
+        super(Actor, self).__init__()
         self.action_dim = params.action_dim
         self.sequence_length = params.sequence_length
         self.d_model = params.d_model
         self.in_dim = params.d_model
+        self.num_distribs = params.num_distribs
+        self.epsilon = epsilon
         self.device = params.device
 
         self.lstm1 = nn.LSTM(input_size=self.in_dim,
@@ -289,25 +285,41 @@ class DirectActor(nn.Module):
         self.lstm2 = nn.LSTM(input_size=layer_size,
                              hidden_size=layer_size, batch_first=True)
 
-        self.fc = nn.Sequential(
-            nn.Linear(layer_size, self.action_dim), nn.Tanh())
+        # self.fc = nn.Sequential(
+        #     nn.Linear(layer_size, self.action_dim), nn.Tanh())
+        
+        self.alpha = nn.Linear(layer_size, self.action_dim * self.num_distribs)
+        self.mu = nn.Linear(layer_size, self.action_dim * self.num_distribs)
+        self.sigma = nn.Linear(layer_size, self.action_dim * self.num_distribs)
         
         init_lstm(self.lstm1)
         init_lstm(self.lstm2)
-        init_linear(self.fc[0])
+        init_linear(self.alpha)
+        init_linear(self.mu)
+        init_linear(self.sigma)
 
     def forward(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
 
         # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ... latent, goal)
         # which works nice in an autoregressive sense since states predict actions
-        x = torch.cat([vision_embedded, proprioception_embedded, latent, goal_embedded], dim=1)  # (bs, 2*seq_len+2, d_model)
-        x, _ = self.lstm1(x)
-        x, _ = self.lstm2(x)
-        x = x[:, -1, :]    # Take the last element of the sequence
-        action = self.fc(x)
-        return action
+        x = torch.stack((vision_embedded, proprioception_embedded), dim=1           
+        ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)          
+        x = torch.cat([x,  latent, goal_embedded], dim=1)  # (bs, 2*seq_len+2, d_model)
 
-    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded):
+        x, _ = self.lstm1(x)
+        # print('first lstm', x)
+        x, _ = self.lstm2(x)
+        # print('second lstm', x)
+        x = x[:, -1, :]    # Take the last element of the sequence
+
+        weightings = self.alpha(x).view(-1, self.action_dim, self.num_distribs)
+        mu = self.mu(x).view(-1, self.action_dim, self.num_distribs)
+        scale = nn.functional.softplus(self.sigma(x)+self.epsilon).view(-1, self.action_dim, self.num_distribs)
+        logistic_mixture = LogisticMixture(weightings, mu, scale)
+
+        return logistic_mixture
+
+    def get_action(self, vision_embedded, proprioception_embedded, latent, goal_embedded, action_embedded):
         """
         Get the action for the current state
         """
@@ -323,10 +335,11 @@ class DirectActor(nn.Module):
         proprioception_embedded = torch.cat([torch.zeros((proprioception_embedded.shape[0], self.sequence_length -
                                             proprioception_embedded.shape[1], self.d_model), device=self.device), proprioception_embedded], dim=1)
 
-        action = self.forward(
-            vision_embedded, proprioception_embedded, latent, goal_embedded)
+        logistic_mixture = self.forward(vision_embedded, proprioception_embedded, latent, goal_embedded)
+        action = logistic_mixture.sample()
+        action_log_prob = logistic_mixture.log_prob(action)
 
-        return action
+        return action, action_log_prob
 
 
 class Critic(nn.Module):
@@ -344,8 +357,7 @@ class Critic(nn.Module):
 
     def forward(self, vision_embedded, proprioception_embedded, action_embedded):
 
-        x = torch.cat([vision_embedded, proprioception_embedded,
-                      action_embedded], dim=-1)
+        x = torch.cat([vision_embedded, proprioception_embedded, action_embedded], dim=-1) # (bs, 3*d_model)
         q_value = self.fc(x)
 
         return q_value
