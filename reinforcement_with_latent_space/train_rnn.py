@@ -102,8 +102,8 @@ class AgentTrainer():
     self.actor.eval()
     
     with torch.no_grad():
-      proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
-      vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
+      proprioception = torch.FloatTensor(proprioception).to(self.device)
+      vision = torch.FloatTensor(vision).to(self.device)
 
       vision_embedded = self.embedding.vision_embed(vision)
       proprioception_embedded = self.embedding.proprioception_embed(proprioception)

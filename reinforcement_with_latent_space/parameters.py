@@ -1,14 +1,14 @@
 import torch
 
 # Sensing parameters 
-vision_dim = (8, 128, 128)
+vision_dim = (4, 128, 128)
 proprioception_dim = 7
 
 # Latent space parameters
 latent_dim = 512
 
 # Action parameters
-action_dim = 7
+action_dim = 8
 num_distribs = 10
 qbits = 8
 
@@ -36,5 +36,5 @@ grad_norm_clipping = 0.5
 beta = 0.01
 memory_size = int(1e3)
 num_episodes = 100
-batch_size = 5
-num_workers = 2
+batch_size = 3
+num_workers = 0

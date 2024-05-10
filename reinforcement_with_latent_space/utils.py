@@ -3,13 +3,13 @@ import torch.distributions.kl as kl
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import h5py
-from mani_skill2.utils.io_utils import load_json
-from mani_skill2.utils.common import flatten_state_dict
+from mani_skill.utils.io_utils import load_json
+from mani_skill.utils.common import flatten_state_dict
 from torch.utils.data import Dataset
 from tqdm.notebook import tqdm
 import numpy as np
 
-class ManiSkill2Dataset(Dataset):
+class ManiSkillDataset(Dataset):
     def __init__(self, dataset_file: str, load_count=-1) -> None:
         self.dataset_file = dataset_file
         # for details on how the code below works, see the
@@ -56,34 +56,21 @@ class ManiSkill2Dataset(Dataset):
         # and combining the rgb and depth images
 
         # image data is not scaled here and is kept as uint16 to save space
-        image_obs = observation["image"]
+        image_obs = observation["sensor_data"]
         rgb = image_obs["base_camera"]["rgb"]
         depth = image_obs["base_camera"]["depth"]
-        rgb2 = image_obs["hand_camera"]["rgb"]
-        depth2 = image_obs["hand_camera"]["depth"]
-
-        state = np.hstack(
-            [
-                flatten_state_dict(observation["agent"]),
-                flatten_state_dict(observation["extra"]),
-            ]
-        )
+        tcp = observation["extra"]["tcp_pose"]
 
         # combine the RGB and depth images
-        rgbd = np.concatenate([rgb, depth, rgb2, depth2], axis=-1)
-        obs = dict(rgbd=rgbd, state=state)
+        rgbd = np.concatenate([rgb, depth], axis=-1)
+        obs = dict(rgbd=rgbd, state=tcp)
         return obs
 
-    def rescale_rgbd(self, rgbd, scale_rgb_only=False):
+    def rescale_rgbd(self, rgbd):
         # rescales rgbd data and changes them to floats
-        rgb1 = rgbd[..., 0:3] / 255.0
-        rgb2 = rgbd[..., 4:7] / 255.0
-        depth1 = rgbd[..., 3:4]
-        depth2 = rgbd[..., 7:8]
-        if not scale_rgb_only:
-            depth1 = rgbd[..., 3:4] / (2**10)
-            depth2 = rgbd[..., 7:8] / (2**10)
-        return np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
+        rgb = rgbd[..., 0:3] / 255.0
+        depth = rgbd[..., 3:4] / (2**10)
+        return np.concatenate([rgb, depth], axis=-1)
 
     def __len__(self):
         return len(self.obs_rgbd)
@@ -93,29 +80,29 @@ class ManiSkill2Dataset(Dataset):
 
         rgbd = self.obs_rgbd[idx]
         rgbd = self.rescale_rgbd(rgbd)
-        rgbd = torch.from_numpy(rgbd).float().permute(0, 3, 1, 2)     # permute data so that channels are the first dimension as PyTorch expects this
+        rgbd = torch.from_numpy(rgbd).squeeze(1).permute(0, 3, 1, 2).float()
 
-        state = torch.from_numpy(self.obs_state[idx]).float()
+        state = self.obs_state[idx]
+        state = torch.from_numpy(state).squeeze(1)
+        state = torch.FloatTensor(state)
 
-        return dict(rgbd=rgbd, state=state), action
+        return dict(rgbd=rgbd, state=state, action=action)
     
 def convert_demonstration(data_bacth):
 
-    observation, actions = data_bacth
-    video = observation["rgbd"]
-    proprioception = observation["state"][:, :, 22:29]
+    actions = data_bacth["action"]
+    video = data_bacth["rgbd"]
+    proprioception = data_bacth['state']
 
     return actions, video, proprioception
 
 def convert_observation(observation):
 
-    image_obs = observation["image"]
-    rgb1 = image_obs["base_camera"]["rgb"] / 255.0
-    depth1 = image_obs["base_camera"]["depth"] / (2**10)
-    rgb2 = image_obs["hand_camera"]["rgb"] / 255.0
-    depth2 = image_obs["hand_camera"]["depth"] / (2**10)
-    vision = np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
-    vision = vision.transpose(2, 0, 1)
+    image_obs = observation["sensor_data"]
+    rgb = image_obs["base_camera"]["rgb"] / 255.0
+    depth = image_obs["base_camera"]["depth"] / (2**10)
+    vision = np.concatenate([rgb, depth], axis=-1)
+    vision = vision.transpose(0, 3, 1, 2)
     proprioception = observation['extra']['tcp_pose']
 
     return vision, proprioception

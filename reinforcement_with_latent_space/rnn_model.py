@@ -25,11 +25,11 @@ def init_lstm(lstm):
 
 def init_linear(module):
     """
-    Initialize linear layers with Xavier uniform initialization and set biases to a small constant.
+    Initialize linear layers with Kaiming (He) uniform initialization and set biases to a small constant.
     This function now handles Sequential modules containing linear layers.
     """
     if isinstance(module, nn.Linear):  # Check if the module is a linear layer
-        init.xavier_uniform_(module.weight)
+        init.kaiming_uniform_(module.weight, nonlinearity='relu')  # Use Kaiming initialization
         if module.bias is not None:
             module.bias.data.fill_(0.01)  # Small constant to avoid dead neurons
     elif isinstance(module, nn.Sequential):  # Check if it's a Sequential module
@@ -82,16 +82,14 @@ class VisionNetwork(nn.Module):
         image_coords = torch.stack([X, Y], dim=-1).to(self.device)  # [H, W, 2]
 
         image_coords = image_coords.unsqueeze(0)  # [1, H, W, 2]
-        image_coords = image_coords.unsqueeze(
-            0)  # [1, H, W, 2] -> [1, 1, H, W, 2]
+        image_coords = image_coords.unsqueeze(0)  # [1, H, W, 2] -> [1, 1, H, W, 2]
 
         # Reshape softmax for broadcasting
         softmax = softmax.unsqueeze(-1)  # [N, C, H, W, 1]
 
         # Compute spatial soft argmax
         # This tensor represents the 'center of mass' for each channel of each feature map in the batch
-        spatial_soft_argmax = torch.sum(
-            softmax * image_coords, dim=[2, 3])  # [N, C, 2]
+        spatial_soft_argmax = torch.sum(softmax * image_coords, dim=[2, 3])  # [N, C, 2]
         x = nn.Flatten()(spatial_soft_argmax)  # [N, C, 2] -> [N, 2*C]
         return x
 
@@ -144,10 +142,8 @@ class PlanRecognition(nn.Module):
         self.device = params.device
 
         # Encoder Layers
-        self.lstm1 = nn.LSTM(self.in_dim, self.layer_size,
-                             batch_first=True, bidirectional=True)
-        self.lstm2 = nn.LSTM(2 * self.layer_size, self.layer_size,
-                             batch_first=True, bidirectional=True)
+        self.lstm1 = nn.LSTM(self.in_dim, self.layer_size, batch_first=True, bidirectional=True)
+        self.lstm2 = nn.LSTM(2 * self.layer_size, self.layer_size, batch_first=True, bidirectional=True)
         self.fc_mu = nn.Linear(2 * self.layer_size, self.latent_dim)
         self.fc_sigma = nn.Linear(2 * self.layer_size, self.latent_dim)
 

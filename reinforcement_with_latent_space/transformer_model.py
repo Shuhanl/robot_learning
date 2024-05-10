@@ -11,11 +11,11 @@ import parameters as params
 
 def init_linear(module):
     """
-    Initialize linear layers with Xavier uniform initialization and set biases to a small constant.
+    Initialize linear layers with Kaiming (He) uniform initialization and set biases to a small constant.
     This function now handles Sequential modules containing linear layers.
     """
     if isinstance(module, nn.Linear):  # Check if the module is a linear layer
-        init.xavier_uniform_(module.weight)
+        init.kaiming_uniform_(module.weight, nonlinearity='relu')  # Use Kaiming initialization
         if module.bias is not None:
             module.bias.data.fill_(0.01)  # Small constant to avoid dead neurons
     elif isinstance(module, nn.Sequential):  # Check if it's a Sequential module
@@ -176,10 +176,10 @@ class PlanRecognition(nn.Module):
         ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)  # (bs, 2*seq_len, d_model)
 
         # Encoder
-        x = self.transformer_encoder(x)
+        x = self.transformer_encoder(x)   # (bs, 2*seq_len, d_model)
 
         # Process output for latent variables as before
-        x = x[:, -1, :]
+        x = x[:, -1, :]         # To do: use CLS token   x = x[:, 0, :] 
         mu = self.fc_mu(x)
         sigma = F.softplus(self.fc_sigma(x) + self.epsilon)
         dist = self.latent_normal(mu, sigma)
@@ -331,17 +331,23 @@ class Actor(nn.Module):
         proprioception_embedded += position_embedded
         action_embedded += position_embedded
         
-        # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ... goal)
+        # this makes the sequence look like (vision_1, pro_1, vision_2, pro_2, ...)
         # which works nice in an autoregressive sense since states predict actions
 
         x = torch.stack((vision_embedded, proprioception_embedded), dim=1
         ).permute(0, 2, 1, 3).reshape(-1, 2*self.sequence_length, self.d_model)  # (bs, 2*seq_len, d_model)
 
+        # (vision_1, pro_1, vision_2, pro_2, ... latent, goal)
         x = torch.cat((x, latent, goal_embedded), dim=1)  # (bs, 2*seq_len+2, d_model)
 
         x = self.transformer_encoder(x)  # (bs, 2*seq_len+2, d_model)
 
-        # x = self.transformer_decoder(action_embedded, x, tgt_mask=mask) # (bs, seq_len, d_model)
+        # x = self.transformer_decoder(action_embedded, x) # (bs, seq_len, d_model)
+
+        # for layer in self.transformer_decoder.layers:
+        #     action_embedded = layer(action_embedded, x)
+        #     print("Output of layer:", torch.isnan(action_embedded).any())
+
 
         # print("NaN in x:", torch.isnan(x).any())
 
