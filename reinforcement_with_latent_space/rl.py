@@ -61,7 +61,7 @@ class PPO:
 
         # Initialize sequential buffers as tensors
         self.vision_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
-        self.pproprioception_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
+        self.proprioception_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
         self.action_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
 
     def set_env(self, env):
@@ -72,7 +72,7 @@ class PPO:
     
     def clear_seq_buffer(self):
         self.vision_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
-        self.pproprioception_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
+        self.proprioception_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
         self.action_buffer = torch.empty((1, self.sequence_length, params.d_model)).to(self.device)
 
     def compute_rtgs(self, reward_batch):
@@ -99,8 +99,8 @@ class PPO:
         vision, proprioception = convert_observation(observation)
 
         # Add batch dimension
-        proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
-        vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
+        proprioception = torch.FloatTensor(proprioception).to(self.device)
+        vision = torch.FloatTensor(vision).to(self.device)
 
         self.clear_seq_buffer()
         for i in range(self.rollout_length):
@@ -110,17 +110,20 @@ class PPO:
             goal_embedded = self.embedding.vision_embed(goal)
 
             self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
-            self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
-            
+            self.proprioception_buffer = self.update_seq_buffer(self.proprioception_buffer, proprioception_embedded)
+
             latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
-            action, _ = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded)
+            action, _ = self.actor.get_action(self.vision_buffer, self.proprioception_buffer, latent, goal_embedded, self.action_buffer)
 
             observation, reward, done, truncated, info = self.env.step(action[0].detach().cpu().numpy())
+            action_embedded = self.embedding.action_embed(action)
+            self.action_buffer = self.update_seq_buffer(self.action_buffer, action_embedded)
+            
             vision, proprioception = convert_observation(observation)
 
             # Add batch dimension
-            proprioception = torch.FloatTensor(proprioception).unsqueeze(0).to(self.device)
-            vision = torch.FloatTensor(vision).unsqueeze(0).to(self.device)
+            proprioception = torch.FloatTensor(proprioception).to(self.device)
+            vision = torch.FloatTensor(vision).to(self.device)
 
             vision_batch[0, i] = vision
             proprioception_batch[0, i] = proprioception
@@ -144,10 +147,10 @@ class PPO:
         goal_embedded = self.embedding.vision_embed(goal)
 
         self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
-        self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
+        self.proprioception_buffer = self.update_seq_buffer(self.proprioception_buffer, proprioception_embedded)
         
         latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
-        action, action_log_prob = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded, self.action_buffer)
+        action, action_log_prob = self.actor.get_action(self.vision_buffer, self.proprioception_buffer, latent, goal_embedded, self.action_buffer)
         action_embedded = self.embedding.action_embed(action)
         self.action_buffer = self.update_seq_buffer(self.action_buffer, action_embedded)
 
@@ -220,7 +223,7 @@ class TargetRL:
 
         # Initialize sequential buffers as tensors
         self.vision_buffer = torch.empty((self.bacth_size, self.sequence_length, params.d_model)).to(self.device)
-        self.pproprioception_buffer = torch.empty((self.bacth_size, self.sequence_length, params.d_model)).to(self.device)
+        self.proprioception_buffer = torch.empty((self.bacth_size, self.sequence_length, params.d_model)).to(self.device)
         self.action_buffer = torch.empty((self.bacth_size, self.sequence_length, params.d_model)).to(self.device)
 
     def store_buffer(self, vision, proprioception, action, reward, next_vision, next_proprioception, done):
@@ -236,8 +239,8 @@ class TargetRL:
         proposal_latent = proposal_dist.sample()
 
         self.vision_buffer = self.update_seq_buffer(self.vision_buffer, vision_embedded)
-        self.pproprioception_buffer = self.update_seq_buffer(self.pproprioception_buffer, proprioception_embedded)
-        next_action, _ = self.target_actor.get_action(self.vision_buffer, self.pproprioception_buffer, proposal_latent, goal_embedded, self.action_buffer)
+        self.proprioception_buffer = self.update_seq_buffer(self.proprioception_buffer, proprioception_embedded)
+        next_action, _ = self.target_actor.get_action(self.vision_buffer, self.proprioception_buffer, proposal_latent, goal_embedded, self.action_buffer)
 
         next_action_embedded = self.embedding.action_embed(next_action)
         self.action_buffer = self.update_seq_buffer(self.action_buffer, next_action_embedded)
