@@ -44,7 +44,7 @@ class AgentTrainer():
 
     # Initialize buffers as tensors
     self.vision_buffer = torch.empty((1, self.sequence_length, self.d_model)).to(self.device)
-    self.pproprioception_buffer = torch.empty((1, self.sequence_length, self.d_model)).to(self.device)
+    self.proprioception_buffer = torch.empty((1, self.sequence_length, self.d_model)).to(self.device)
     self.action_buffer = torch.empty(1, self.sequence_length, self.d_model).to(self.device)
 
     """ Wrap your models with DataParallel """
@@ -67,22 +67,22 @@ class AgentTrainer():
       self.target_actor = self.target_actor.to(self.device)
       self.target_critic = self.target_critic.to(self.device)
   
-    # self.ppo = PPO(embedding=self.embedding, plan_proposal=self.plan_proposal,
-    #     actor=self.actor,
-    #     critic=self.critic,
-    #     actor_optimizer=self.actor_optimizer,
-    #     critic_optimizer=self.critic_optimizer,
-    #     gamma = params.gamma,
-    #     tau = params.tau,
-    #     epsilon = params.epsilon)
+    self.ppo = PPO(embedding=self.embedding, plan_proposal=self.plan_proposal,
+        actor=self.actor,
+        critic=self.critic,
+        actor_optimizer=self.actor_optimizer,
+        critic_optimizer=self.critic_optimizer,
+        gamma = params.gamma,
+        tau = params.tau,
+        epsilon = params.epsilon)
 
-    self.target_rl = TargetRL(embedding=self.embedding, plan_proposal=self.plan_proposal, 
-              actor=self.actor,
-              critic=self.critic,
-              target_actor=self.target_actor,
-              target_critic=self.target_critic,
-              actor_optimizer=self.actor_optimizer,
-              critic_optimizer=self.critic_optimizer, gamma = params.target_gamma, target_tau=params.target_tau)
+    # self.target_rl = TargetRL(embedding=self.embedding, plan_proposal=self.plan_proposal, 
+    #           actor=self.actor,
+    #           critic=self.critic,
+    #           target_actor=self.target_actor,
+    #           target_critic=self.target_critic,
+    #           actor_optimizer=self.actor_optimizer,
+    #           critic_optimizer=self.critic_optimizer, gamma = params.target_gamma, target_tau=params.target_tau)
 
   def set_goal(self, goal):
     self.embedding.eval()
@@ -110,12 +110,11 @@ class AgentTrainer():
       goal_embedded = self.embedding.vision_embed(self.goal)
 
       self.vision_buffer = self.update_buffer(self.vision_buffer, vision_embedded)
-      self.pproprioception_buffer = self.update_buffer(self.pproprioception_buffer, proprioception_embedded)
+      self.proprioception_buffer = self.update_buffer(self.proprioception_buffer, proprioception_embedded)
 
       latent = self.plan_proposal(vision_embedded, proprioception_embedded, goal_embedded).sample()
 
-      action, _ = self.actor.get_action(self.vision_buffer, self.pproprioception_buffer, latent, goal_embedded, self.action_buffer)
-
+      action, _ = self.actor.get_action(self.vision_buffer, self.proprioception_buffer, latent, goal_embedded, self.action_buffer)
       action_embedded= self.embedding.action_embed(action)
       self.action_buffer = self.update_buffer(self.action_buffer, action_embedded)
       
@@ -190,10 +189,10 @@ class AgentTrainer():
   
   def fine_tune(self):
 
-    critic_loss, actor_loss = self.target_rl.update_model(self.goal)
-    self.target_rl.update_target()
+    # critic_loss, actor_loss = self.target_rl.update_model(self.goal)
+    # self.target_rl.update_target()
 
-    # critic_loss, actor_loss = self.ppo.update_model(self.goal)
+    critic_loss, actor_loss = self.ppo.update_model(self.goal)
 
     return critic_loss, actor_loss
 

@@ -102,7 +102,7 @@ def convert_observation(observation):
     rgb = image_obs["base_camera"]["rgb"] / 255.0
     depth = image_obs["base_camera"]["depth"] / (2**10)
     vision = np.concatenate([rgb, depth], axis=-1)
-    vision = vision.transpose(0, 3, 1, 2)
+    vision = vision.transpose(0, 3, 1, 2)    # [batch_size, channel, height, width]
     proprioception = observation['extra']['tcp_pose']
 
     return vision, proprioception
