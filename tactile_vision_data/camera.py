@@ -14,7 +14,18 @@ class RealSenseCamera:
 
         # Start the pipeline
         self.pipeline.start(self.config)
-        
+
+        """ April tag """
+        self.family="tag36h11"
+        self.options = apriltag.DetectorOptions(self.family)
+        self.detector = apriltag.Detector(self.options)
+
+        self.num_calib_image = 10
+        self.num_calib_tag = 1
+        self.tag_size = 0.05  # AprilTag side length in meters
+        self.image_size = (640, 480)
+        self.camera_params = [640, 480, 320, 240]  # fx, fy, cx, cy
+ 
     def capture_frames(self):
         # This function captures frames from both color and depth streams
         frames = self.pipeline.wait_for_frames()
@@ -32,18 +43,6 @@ class RealSenseCamera:
 
         return color_image, depth_colormap
     
-    def release(self):
-        # Stop the pipeline
-        self.pipeline.stop()
-
-class AprilTag:
-    def __init__(self):
-        self.options = apriltag.DetectorOptions(families="tag36h11")
-        self.detector = apriltag.Detector(self.options)
-
-        self.camera_params = [640, 480, 320, 240]  # fx, fy, cx, cy
-        self.tag_size = 0.05  # AprilTag side length in meters
-
     def detect_apriltags(self, color_image):
         # Convert to grayscale
         gray_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
@@ -80,26 +79,78 @@ class AprilTag:
 
         return tags
 
+    def calibrate_camera(self):
+        images = []
+        object_points = []
+        image_points = []
+
+        try:
+            while True:  # Changed to a continuous loop until sufficient tags are detected.
+                frames = self.pipeline.wait_for_frames()
+                color_frame = frames.get_color_frame()
+                if not color_frame:
+                    continue
+                image = np.asanyarray(color_frame.get_data())
+
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                detections = self.detector.detect(gray)
+                if len(detections) >= self.num_calib_tag:  # Check if at least num_calib_tag are detected.
+                    print(f"Detected {len(detections)} tags, sufficient for calibration.")
+                    images.append(image)
+                    for detection in detections:
+                        corners = detection.corners
+                        image_points.append(corners)
+                        object_points.append(np.array([
+                            [-self.tag_size/2, -self.tag_size/2, 0],
+                            [self.tag_size/2, -self.tag_size/2, 0],
+                            [self.tag_size/2, self.tag_size/2, 0],
+                            [-self.tag_size/2, self.tag_size/2, 0]
+                        ], dtype=np.float32))
+                    if len(images) >= self.num_calib_image:  # Check if enough images are collected.
+                        break
+                else:
+                    print(f"Detected {len(detections)} tags, need at least num_calib_tag for a valid calibration image.")
+
+        finally:
+            self.pipeline.stop()
+
+        # Proceed with calibration if sufficient valid images have been collected.
+        ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(object_points, image_points, self.image_size, None, None)
+        print(f"Calibration successful: {ret}")
+
+        return ret, mtx, dist, rvecs, tvecs
+
+    
+    def release(self):
+        # Stop the pipeline
+        self.pipeline.stop()
+
+
 def main():
     camera = RealSenseCamera()
-    april_tag = AprilTag()
-    try:
-        while True:
-            color_image, depth_colormap = camera.capture_frames()
-            if color_image is None or depth_colormap is None:
-                continue
 
-            # Tag detection
-            tags = april_tag.detect_apriltags(color_image)
+    ret, mtx, dist, rvecs, tvecs = camera.calibrate_camera()
+    print("Calibration successful:", ret)
+    print("Camera matrix:\n", mtx)
+    print("Distortion coefficients:\n", dist)
 
-            cv2.imshow('RGB with Markers', color_image)
-            cv2.imshow('Depth', depth_colormap)
+    # try:
+    #     while True:
+    #         color_image, depth_colormap = camera.capture_frames()
+    #         if color_image is None or depth_colormap is None:
+    #             continue
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-    finally:
-        camera.release()
-        cv2.destroyAllWindows()
+    #         # Tag detection
+    #         tags = camera.detect_apriltags(color_image)
+
+    #         cv2.imshow('RGB with Markers', color_image)
+    #         cv2.imshow('Depth', depth_colormap)
+
+    #         if cv2.waitKey(1) & 0xFF == ord('q'):
+    #             break
+    # finally:
+    #     camera.release()
+    #     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     main()
