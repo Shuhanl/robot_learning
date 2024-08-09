@@ -1,5 +1,6 @@
 opencv-contrib-python==4.10.0.82
 opencv-python==4.8.0.76
 pyrealsense2==2.53.1.4623
+apriltag
 pybullet
 
