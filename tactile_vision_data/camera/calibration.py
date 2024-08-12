@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 
-class Calibration():
+class Calibration(object):
     def __init__(self,pattern_size=(8,6),square_size=15,handeye='EIH'):
         '''
 
