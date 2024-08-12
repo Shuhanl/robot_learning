@@ -79,47 +79,6 @@ class RealSenseCamera:
 
         return tags
 
-    def calibrate_camera(self):
-        images = []
-        object_points = []
-        image_points = []
-
-        try:
-            while True:  # Changed to a continuous loop until sufficient tags are detected.
-                frames = self.pipeline.wait_for_frames()
-                color_frame = frames.get_color_frame()
-                if not color_frame:
-                    continue
-                image = np.asanyarray(color_frame.get_data())
-
-                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                detections = self.detector.detect(gray)
-                if len(detections) >= self.num_calib_tag:  # Check if at least num_calib_tag are detected.
-                    print(f"Detected {len(detections)} tags, sufficient for calibration.")
-                    images.append(image)
-                    for detection in detections:
-                        corners = detection.corners
-                        image_points.append(corners)
-                        object_points.append(np.array([
-                            [-self.tag_size/2, -self.tag_size/2, 0],
-                            [self.tag_size/2, -self.tag_size/2, 0],
-                            [self.tag_size/2, self.tag_size/2, 0],
-                            [-self.tag_size/2, self.tag_size/2, 0]
-                        ], dtype=np.float32))
-                    if len(images) >= self.num_calib_image:  # Check if enough images are collected.
-                        break
-                else:
-                    print(f"Detected {len(detections)} tags, need at least num_calib_tag for a valid calibration image.")
-
-        finally:
-            self.pipeline.stop()
-
-        # Proceed with calibration if sufficient valid images have been collected.
-        ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(object_points, image_points, self.image_size, None, None)
-        print(f"Calibration successful: {ret}")
-
-        return ret, mtx, dist, rvecs, tvecs
-
     
     def release(self):
         # Stop the pipeline
