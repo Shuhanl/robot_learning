@@ -54,10 +54,7 @@ class SLAM(object):
         :return: xyzrgb
         '''
         heightIMG, widthIMG, _ = color.shape
-        # heightIMG = 720
-        # widthIMG = 1280
         depthImg = depth / 1000.
-        # depthImg = depth
         if inpaint:
             depthImg = self.inpaint(depthImg)
         robot_pose = np.dot(robot_pose, camee_pose)
