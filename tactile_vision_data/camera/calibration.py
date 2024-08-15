@@ -4,7 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 
 class Calibration(object):
-    def __init__(self,pattern_size=(8,6),square_size=15,handeye='EIH'):
+    def __init__(self,pattern_size=(9,6),square_size=21,handeye='EIH'):
         '''
 
         :param image_list:  image array, num*720*1280*3
