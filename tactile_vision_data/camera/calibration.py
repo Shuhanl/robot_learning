@@ -2,9 +2,10 @@ from camera import *
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+import yaml
 
 class Calibration(object):
-    def __init__(self,pattern_size=(9,6),square_size=21,handeye='EIH'):
+    def __init__(self,pattern_size,square_size,handeye='EIH'):
         '''
 
         :param image_list:  image array, num*720*1280*3
@@ -33,24 +34,16 @@ class Calibration(object):
     def detectFeature(self,color,show=True):
         img = color
         self.gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        ret, corners = cv2.findChessboardCorners(img, self.pattern_size, None,
-                                                 cv2.CALIB_CB_ADAPTIVE_THRESH)  # + cv2.CALIB_CB_NORMALIZE_IMAGE+ cv2.CALIB_CB_FAST_CHECK)
+
+        ret, corners = cv2.findChessboardCorners(img, self.pattern_size, None, cv2.CALIB_CB_ADAPTIVE_THRESH)  # + cv2.CALIB_CB_NORMALIZE_IMAGE+ cv2.CALIB_CB_FAST_CHECK)
         if ret == True:
             self.objpoints.append(self.objp)
-            # corners2 = corners
-            if (cv2.__version__).split('.')[0] == '2':
-                # pdb.set_trace()
-                cv2.cornerSubPix(self.gray, corners, (5, 5), (-1, -1), self.criteria)
-                corners2 = corners
-            else:
-                corners2 = cv2.cornerSubPix(self.gray, corners, (5, 5), (-1, -1), self.criteria)
+            corners2 = cv2.cornerSubPix(self.gray, corners, (5, 5), (-1, -1), self.criteria)
             self.imgpoints.append(corners2)
             if show:
-                fig, ax = plt.subplots(figsize=(20, 20))
-                ax.imshow(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                img = cv2.drawChessboardCorners(img, self.pattern_size, corners2, ret)
                 plt.title('img with feature point')
-                for i in range(self.pattern_size[0] * self.pattern_size[1] - 3):
-                    ax.plot(corners2[i, 0, 0], corners2[i, 0, 1], 'r+')
+                plt.imshow(img)
                 plt.show()
 
     """ Convert a rotation vector to a 4x4 transformation matrix """
@@ -74,9 +67,8 @@ class Calibration(object):
         return T
     
     def perform_camera_calibration(self):
-        if self.imgpoints:
-            gray_shape = cv2.cvtColor(self.imgpoints[0], cv2.COLOR_BGR2GRAY).shape[::-1]
-            ret, self.camera_matrix, self.dist_coeffs, self.rvecs, self.tvecs = cv2.calibrateCamera(self.objpoints, self.imgpoints, gray_shape, None, None)
+        if self.imgpoints:       
+            ret, self.camera_matrix, self.dist_coeffs, self.rvecs, self.tvecs = cv2.calibrateCamera(self.objpoints, self.imgpoints, self.gray.shape[::-1], None, None)
             return self.camera_matrix, self.dist_coeffs, self.rvecs, self.tvecs
         else:
             return None, None, None, None
@@ -97,16 +89,25 @@ class Calibration(object):
         
 
 if __name__ == "__main__":
-    cam = RealSenseCamera()
-    calib = Calibration(pattern_size=(8,6), square_size=15)
+    # cam = RealSenseCamera()
+    calib = Calibration(pattern_size=(9,6), square_size=21)
     
     """ Capture single picture for calibration """
-    color, depth = cam.get_data()
+    # color, depth = cam.get_data()
+    color = cv2.imread('pattern.png')
     plt.imshow(color)
     plt.show()
-    # calib.detectFeature(color)
-    # mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
-    # print(mtx, dist, rvecs, tvecs)
+
+    calib.detectFeature(color)
+    mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
+
+    # transform the matrix and distortion coefficients to writable lists
+    data = {'camera_matrix': np.asarray(mtx).tolist(),
+            'dist_coeff': np.asarray(dist).tolist()}
+
+    # and save it to a file
+    with open("calibration_matrix.yaml", "w") as f:
+        yaml.dump(data, f)
 
     """ Capture sequences of pictures with pose info for calibration """
     # pose_list = []
