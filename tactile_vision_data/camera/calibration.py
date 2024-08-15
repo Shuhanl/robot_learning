@@ -16,7 +16,7 @@ class Calibration(object):
         self.pattern_size = pattern_size  # The number of inner corners of the chessboard in width and height.
         self.square_size = square_size
         self.handeye = handeye
-        self.mtx = np.load('config/franka_d415mtx.npy')
+        # self.mtx = np.load('config/franka_d415mtx.npy')
         self.init_calib()
 
     def init_calib(self):
@@ -99,15 +99,26 @@ class Calibration(object):
 if __name__ == "__main__":
     cam = RealSenseCamera()
     calib = Calibration(pattern_size=(8,6), square_size=15)
-    pose_list = []
-    # Assuming cam and panda are predefined objects
-    for joint in jointList:
-        panda.moveJoint(joint)
-        current_pose = np.array(panda.robot.read_once().O_T_EE).reshape(4, 4).T
-        color, depth = cam.get_data()
-        cam.detect_feature(color)
-        pose_list.append(current_pose)
+    
+    """ Capture single picture for calibration """
+    color, depth = cam.get_data()
+    plt.imshow(color)
+    plt.show()
+    # calib.detectFeature(color)
+    # mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
+    # print(mtx, dist, rvecs, tvecs)
 
-    mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
-    camT = calib.perform_hand_eye_calibration(pose_list, rvecs, tvecs)
-    np.save('config/campose20210909_franka.npy', camT)
+    """ Capture sequences of pictures with pose info for calibration """
+    # pose_list = []
+    # Assuming cam and panda are predefined objects
+    # for joint in jointList:
+    #     panda.moveJoint(joint)
+    #     current_pose = np.array(panda.robot.read_once().O_T_EE).reshape(4, 4).T
+    #     color, depth = cam.get_data()
+    #     cam.detect_feature(color)
+    #     pose_list.append(current_pose)
+
+
+    # mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
+    # camT = calib.perform_hand_eye_calibration(pose_list, rvecs, tvecs)
+    # np.save('config/campose20210909_franka.npy', camT)
