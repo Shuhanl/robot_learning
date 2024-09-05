@@ -92,11 +92,11 @@ if __name__ == "__main__":
     xyzrgb = slam.getXYZRGB(color, depth, np.identity(4), np.identity(4), cam.getIntrinsics(), inpaint=False)
     slam.vis_pc(xyzrgb[:,:3])
 
-    while True:
-        color, depth = cam.get_data(hole_filling=False)
+    # while True:
+    #     color, depth = cam.get_data(hole_filling=False)
   
-        # pdb.set_trace()
-        depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth, alpha=0.03),cv2.COLORMAP_JET)
-        cv2.imshow('depth', depth_colormap)
-        cv2.imshow('color', color)
-        cv2.waitKey(1)
+    #     # pdb.set_trace()
+    #     depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth, alpha=0.03),cv2.COLORMAP_JET)
+    #     cv2.imshow('depth', depth_colormap)
+    #     cv2.imshow('color', color)
+    #     cv2.waitKey(1)
