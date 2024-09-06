@@ -1,6 +1,7 @@
 from camera import *
 import numpy as np
 import cv2
+from robot.flexiv import FlexivRobot
 import matplotlib.pyplot as plt
 
 class Calibration(object):
@@ -99,6 +100,9 @@ class Calibration(object):
 if __name__ == "__main__":
     cam = RealSenseCamera()
     calib = Calibration(pattern_size=(8,6), square_size=15)
+    jointList = [[0.41219, -0.807, -0.922, -1.858, 0.168, 1.870, 0.0011],
+                [-0.314, -1.01202, 0.180, -2.315, 0.401, 2.122, 0.589],
+                [-1.364, -1.540, 0.583, -1.33, 1.012, 1.35, 1.38]]
     pose_list = []
     # Assuming cam and panda are predefined objects
     for joint in jointList:

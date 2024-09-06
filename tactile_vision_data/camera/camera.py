@@ -101,13 +101,13 @@ class RealSenseCamera(object):
             break
         return color_image, depth_image
 
-    def getXYZRGB(self, color, depth, camIntrinsics, robot_pose, camee_pose, inpaint=True):
+    def getXYZRGB(self, color, depth, camIntrinsics, robot_pose, camera_pose, inpaint=True):
         '''
 
         :param color:
         :param depth:
         :param robot_pose: array 4*4
-        :param camee_pose: array 4*4
+        :param camera_pose: array 4*4
         :param camIntrinsics: array 3*3
         :param inpaint: bool
         :return: xyzrgb
@@ -116,7 +116,7 @@ class RealSenseCamera(object):
         depthImg = depth / 1000.
         if inpaint:
             depthImg = self.inpaint(depthImg)
-        robot_pose = np.dot(robot_pose, camee_pose)
+        robot_pose = np.dot(robot_pose, camera_pose)
 
         [pixX, pixY] = np.meshgrid(np.arange(widthIMG), np.arange(heightIMG))
         camX = (pixX - camIntrinsics[0][2]) * depthImg / camIntrinsics[0][0]
@@ -130,7 +130,6 @@ class RealSenseCamera(object):
                                                                                               1)  # shape = (3, heightIMG*widthIMG)
         rgb = color.reshape((-1, 3)) / 255.
         xyzrgb = np.hstack((worldPts.T, rgb))
-        xyzrgb = self.getleft(xyzrgb)
         return xyzrgb        
     
     def release(self):
