@@ -1,96 +1,90 @@
 from camera import RealSenseCamera
 import numpy as np
-import cv2
 import pdb
 import open3d as o3d
 
 class SLAM(object):
     def __init__(self):
-        print("Init slam")
+        self.point_cloud = []
+        self.processed_point_cloud = []
 
-    def inpaint(self, img, missing_value=0):
+    def icp_pointcloud(self, source_pcd, target_pcd):
         '''
-        pip opencv-python == 3.4.8.29
-        :param image:
-        :param roi: [x0,y0,x1,y1]
-        :param missing_value:
-        :return:
+        transform target to source frame
+        :param source: numpy.ndarray
+        :param target: numpy.ndarray
+        :return: transformed source numpy.ndarray
         '''
-        # cv2 inpainting doesn't handle the border properly
-        # https://stackoverflow.com/questions/25974033/inpainting-depth-map-still-a-black-image-border
-        img = cv2.copyMakeBorder(img, 1, 1, 1, 1, cv2.BORDER_DEFAULT)
-        mask = (img == missing_value).astype(np.uint8)
 
-        # Scale to keep as float, but has to be in bounds -1:1 to keep opencv happy.
-        scale = np.abs(img).max()
-        if scale < 1e-3:
-            pdb.set_trace()
-        img = img.astype(np.float32) / scale  # Has to be float32, 64 not supported.
-        img = cv2.inpaint(img, mask, 1, cv2.INPAINT_NS)
+        # Compute the ICP transformation
+        icp_result = o3d.pipelines.registration.registration_icp(
+            source_pcd, target_pcd, max_correspondence_distance=0.02,
+            init=np.identity(4),
+            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000)
+        )
+        # Apply the transformation to the source point cloud
+        source_pcd.transform(icp_result.transformation)
+        aligned_source = np.asarray(source_pcd.points)
 
-        # Back to original size and value range.
-        img = img[1:-1, 1:-1]
-        img = img * scale
-        return img
+        return aligned_source
 
-    def getleft(self, obj1):
-        index = np.bitwise_and(obj1[:, 0] < 1.2, obj1[:, 0] > 0.2)
-        index = np.bitwise_and(obj1[:, 1] < 0.5, index)
-        index = np.bitwise_and(obj1[:, 1] > -0.5, index)
-        # index = np.bitwise_and(obj1[:, 2] > -0.1, index)
-        index = np.bitwise_and(obj1[:, 2] > 0.24, index)
-        index = np.bitwise_and(obj1[:, 2] < 0.6, index)
-        return obj1[index]
+    def cal_norm(self, point_cloud):
+                
+        # Estimate normals using Open3D. The radius or the number of neighbors used to estimate the normals can be set here.
+        point_cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+        
+        # Optionally, reorient the normals so that they all point in a consistent direction
+        # This can be useful if the normals are oriented inconsistently across the cloud
+        point_cloud.orient_normals_towards_camera_location(camera_location=np.array([0,0,0]))
+        
+        # Flip normals that point below the horizontal plane (assumed)
+        normals = np.asarray(point_cloud.normals)
+        if normals[2] < 0:
+            normals = -normals
+                
+        return normals
+
+    def process_point_cloud(self):
+       
+        point_cloud = o3d.geometry.PointCloud()
+        if self.point_cloud.shape[-1] == 6:
+            point_cloud.points = o3d.utility.Vector3dVector(self.point_cloud[:, :3])
+        elif self.point_cloud.shape[-1] == 3:
+            point_cloud.points = o3d.utility.Vector3dVector(self.point_cloud)
+        else:
+            pdb.set_trace()     
+
+        for i in range(1, len(point_cloud.points)):
+            aligned_pc = self.icp_pointcloud(point_cloud[i], point_cloud[i-1])
+            normals = self.cal_norm(aligned_pc)
+            if self.point_cloud.shape[-1] == 6:
+                # Combine XYZ rgb and normals into a single array
+                self.process_pointcloud = self.process_pointcloud.append(np.hstack((aligned_pc, self.point_cloud[i, 3:], normals)))
+            elif self.point_cloud.shape[-1] == 3:
+                # Combine XYZ normals into a single array
+                self.process_pointcloud = np.hstack((aligned_pc, normals))
+            else:
+                pdb.set_trace()  
     
-    def getXYZRGB(self,color, depth, robot_pose,camee_pose,camIntrinsics,inpaint=True):
-        '''
-
-        :param color:
-        :param depth:
-        :param robot_pose: array 4*4
-        :param camee_pose: array 4*4
-        :param camIntrinsics: array 3*3
-        :param inpaint: bool
-        :return: xyzrgb
-        '''
-        heightIMG, widthIMG, _ = color.shape
-        depthImg = depth / 1000.
-        if inpaint:
-            depthImg = self.inpaint(depthImg)
-        robot_pose = np.dot(robot_pose, camee_pose)
-
-        [pixX, pixY] = np.meshgrid(np.arange(widthIMG), np.arange(heightIMG))
-        camX = (pixX - camIntrinsics[0][2]) * depthImg / camIntrinsics[0][0]
-        camY = (pixY - camIntrinsics[1][2]) * depthImg / camIntrinsics[1][1]
-        camZ = depthImg
-
-        camPts = [camX.reshape(camX.shape + (1,)), camY.reshape(camY.shape + (1,)), camZ.reshape(camZ.shape + (1,))]
-        camPts = np.concatenate(camPts, 2)
-        camPts = camPts.reshape((camPts.shape[0] * camPts.shape[1], camPts.shape[2]))  # shape = (heightIMG*widthIMG, 3)
-        worldPts = np.dot(robot_pose[:3, :3], camPts.transpose()) + robot_pose[:3, 3].reshape(3,
-                                                                                              1)  # shape = (3, heightIMG*widthIMG)
-        rgb = color.reshape((-1, 3)) / 255.
-        xyzrgb = np.hstack((worldPts.T, rgb))
-        xyzrgb = self.getleft(xyzrgb)
-        return xyzrgb
-
     def vis_pc(self, pc):
         pc1 = o3d.geometry.PointCloud()
         pc1.points = o3d.utility.Vector3dVector(pc)
         o3d.visualization.draw_geometries([pc1])
 
-    def __del__(self):
-        self.pipeline.stop()
-
-
 if __name__ == "__main__":
     cam = RealSenseCamera()
     slam = SLAM()
 
-    # pdb.set_trace()
-    color, depth = cam.get_data(hole_filling=False)
-    xyzrgb = slam.getXYZRGB(color, depth, np.identity(4), np.identity(4), cam.getIntrinsics(), inpaint=False)
-    slam.vis_pc(xyzrgb[:,:3])
+    while True:
+        color, depth = cam.get_data(hole_filling=False)
+        camIntrinsics = cam.getIntrinsics()
+        xyzrgb = slam.getXYZRGB(color, depth, camIntrinsics, np.identity(4), np.identity(4), inpaint=False)
+        slam.point_cloud.append(xyzrgb)
+
+        if len(slam.point_cloud) % 10 == 0:  # Periodically process or visualize
+            slam.process_point_cloud()
+            slam.vis_pc(slam.processed_point_cloud[:,:3])
 
     # while True:
     #     color, depth = cam.get_data(hole_filling=False)
