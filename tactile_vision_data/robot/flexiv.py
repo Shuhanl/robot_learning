@@ -1,23 +1,22 @@
 import sys
-sys.path.insert(0, '/home/ubuntu/my_code/flexiv_rdk/lib_py')
+sys.path.insert(0, '/home/flexiv/Desktop/flexiv_rdk/lib_py')
 import flexivrdk
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
+import spdlog  
 
 class FlexivRobot:
     """
     Flexiv Robot Control Class.
     """
 
-    logger_name = "FlexivRobot"
-
-    def __init__(self, gripper_robot_addr=["192.168.3.100","192.168.3.35"]):
+    def __init__(self, gripper_robot_addr=["192.168.3.100"]):
         """
         Initialize.
 
         Args:
-            gripper_robot_addr: ["192.168.3.100","192.168.3.35"], robot_ip, local_ip
+            gripper_robot_addr: ["192.168.3.100"], robot_ip
 
         Raises:
             RuntimeError: error occurred when ip_address is None.
@@ -26,7 +25,7 @@ class FlexivRobot:
         self.robot_states = {"gripper_robot":flexivrdk.RobotStates()}
 
         self.robot_addr = {"gripper_robot":gripper_robot_addr}
-        self.log = flexivrdk.Log()
+        self.log = spdlog.ConsoleLogger("FlexivRobot")
         self.robot = {"gripper_robot":None}
 
         self.init_robot('gripper_robot')
@@ -46,12 +45,12 @@ class FlexivRobot:
 
         init_gripper_joints = np.array([-0.586136, -0.745720, 0.52749, 1.55923, 0.3157, 1.063024, -0.81544])
 
-        target_vel = [0.0]*7 + [0.05] + [0.0]*7
-        target_acc = [0.0]*7 + [10] + [0.0]*7
+        target_vel = [0.0]*7 + [0.05]
+        target_acc = [0.0]*7 + [10]
         qinit = init_gripper_joints.tolist() + [0.06]
 
-        max_vel=[0.1] * 14
-        max_acc=[0.3] * 14
+        max_vel=[0.1] * 7
+        max_acc=[0.3] * 7
         print("You must be aware of the movements that will occur during the initialization of the robotic arm")
         import pdb;pdb.set_trace()
         self.update_joint_state(qinit, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
@@ -66,10 +65,10 @@ class FlexivRobot:
         self.robot[name].setMode(self.mode.NRT_JOINT_POSITION)
 
     
-    def update_joint_state(self, target_pos, target_vel=[0.0]*7 + [0.05] + [0.0]*7, target_acc=[0.0]*7 + [0.05] + [0.0]*7, max_vel=[0.2] * 14, max_acc=[0.3] * 14):
+    def update_joint_state(self, target_pos, target_vel=[0.0]*7 + [0.05], target_acc=[0.0]*7 + [0.05], max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
-        15-dof: target [:7] gripper robot cmd, target[7] gripper cmd, target[-7:] ft robot cmd 
-        14-dof: max_vel, max_acc
+        8-dof: target [:7] gripper robot cmd, target[7] gripper cmd
+        7-dof: max_vel, max_acc
         '''
         gripper_pos, gripper_vel, gripper_acc, gripper_max_vel, gripper_max_acc = \
             target_pos[:7], target_vel[:7], target_acc[:7], max_vel[:7], max_acc[:7]
@@ -82,10 +81,10 @@ class FlexivRobot:
         self.robot['gripper_robot'].sendJointPosition(gripper_pos, gripper_vel, gripper_acc, gripper_max_vel, gripper_max_acc)
         self.gripper.move(gripper_width, gripper_velocity, gripper_force)
     
-    def update_trajectory_state(self, target_pos_list, target_vel, target_acc, max_vel=[0.2] * 14, max_acc=[0.3] * 14):
+    def update_trajectory_state(self, target_pos_list, target_vel, target_acc, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
-        [15-dof]: target [:7] gripper robot cmd, target[7] gripper cmd, target[-7:] ft robot cmd 
-        14-dof: max_vel, max_acc
+        [8-dof]: target [:7] gripper robot cmd, target[7] gripper cmd
+        7-dof: max_vel, max_acc
         '''
         for target_pos in target_pos_list:
             gripper_dis, width_dis = self.get_delta_q(target_pos)
@@ -139,8 +138,8 @@ class FlexivRobot:
             return np.array(self._get_robot_status(name).extWrenchInTcp)
     
     def init_robot(self, name="gripper_robot"):
-        robot_ip, local_ip = self.robot_addr[name]
-        robot = flexivrdk.Robot(robot_ip, local_ip)
+        robot_ip = self.robot_addr[name]
+        robot = flexivrdk.Robot(robot_ip)
         # Clear fault on robot server if any
         if robot.isFault():
             self.log.info("Fault occurred on robot server, trying to clear ...")
@@ -267,13 +266,13 @@ if __name__ == "__main__":
     
     q1 = gripper_rest_joints.tolist() + [0.09] 
     q2 = gripper_joints.tolist() + [0.01] 
-    target_vel = [0.0]*7 + [0.05] + [0.0]*7
-    target_acc = [0.0]*7 + [10] + [0.0]*7
+    target_vel = [0.0]*7 + [0.05] 
+    target_acc = [0.0]*7 + [10]
 
     qinit = init_gripper_joints.tolist() + [0.09]
 
-    max_vel=[0.2] * 14
-    max_acc=[0.3] * 14
+    max_vel=[0.2] * 7
+    max_acc=[0.3] * 7
 
     import pdb;pdb.set_trace()
     flexiv_robot.go_init_joint()
