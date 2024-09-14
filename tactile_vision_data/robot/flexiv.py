@@ -11,12 +11,12 @@ class FlexivRobot:
     Flexiv Robot Control Class.
     """
 
-    def __init__(self, gripper_robot_addr=["192.168.3.100"]):
+    def __init__(self, robot_sn="Rizon4s-062534"):
         """
         Initialize.
 
         Args:
-            gripper_robot_addr: ["192.168.3.100"], robot_ip
+            gripper_robot_sn: ["192.168.3.100"], robot_ip
 
         Raises:
             RuntimeError: error occurred when ip_address is None.
@@ -24,13 +24,13 @@ class FlexivRobot:
         self.mode = flexivrdk.Mode
         self.robot_states = {"gripper_robot":flexivrdk.RobotStates()}
 
-        self.robot_addr = {"gripper_robot":gripper_robot_addr}
+        self.robot_sn = robot_sn
         self.log = spdlog.ConsoleLogger("FlexivRobot")
-        self.robot = {"gripper_robot":None}
+        self.robot = None
 
-        self.init_robot('gripper_robot')
-        self.robot['gripper_robot'].setMode(self.mode.NRT_JOINT_POSITION)
-        self.init_gripper()
+        self.init_robot()
+        self.robot.SwitchMode(self.mode.NRT_JOINT_POSITION)
+        # self.init_gripper()
 
         self.joint_limits_low = np.array([-2.7925, -2.2689, -2.9671, -1.8675, -2.9671, -1.3963, -2.9671]) + 0.1
         self.joint_limits_high = np.array([2.7925, 2.2689, 2.9671, 2.6878, 2.9671, 4.5379, 2.9671]) - 0.1
@@ -52,17 +52,17 @@ class FlexivRobot:
         max_vel=[0.1] * 7
         max_acc=[0.3] * 7
         print("You must be aware of the movements that will occur during the initialization of the robotic arm")
-        import pdb;pdb.set_trace()
+        # import pdb;pdb.set_trace()
         self.update_joint_state(qinit, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
-        import pdb;pdb.set_trace()
+        # import pdb;pdb.set_trace()
     
-    def set_zero_ft(self,name='gripper_robot'):
-        self.robot[name].setMode(self.mode.NRT_PRIMITIVE_EXECUTION)
-        self.robot[name].executePrimitive("ZeroFTSensor()")
-        while self.robot[name].isBusy():
+    def set_zero_ft(self):
+        self.robot.SwitchMode(self.mode.NRT_PRIMITIVE_EXECUTION)
+        self.robot.ExecutePrimitive("ZeroFTSensor()")
+        while self.robot.busy():
             time.sleep(1)
         self.log.info("Sensor zeroing complete")
-        self.robot[name].setMode(self.mode.NRT_JOINT_POSITION)
+        self.robot.SwitchMode(self.mode.NRT_JOINT_POSITION)
 
     
     def update_joint_state(self, target_pos, target_vel=[0.0]*7 + [0.05], target_acc=[0.0]*7 + [0.05], max_vel=[0.2] * 7, max_acc=[0.3] * 7):
@@ -78,8 +78,8 @@ class FlexivRobot:
         gripper_force = target_acc[7]
 
         gripper_pos = np.clip(np.array(gripper_pos), self.joint_limits_low, self.joint_limits_high).tolist()
-        self.robot['gripper_robot'].sendJointPosition(gripper_pos, gripper_vel, gripper_acc, gripper_max_vel, gripper_max_acc)
-        self.gripper.move(gripper_width, gripper_velocity, gripper_force)
+        self.robot.SendJointPosition(gripper_pos, gripper_vel, gripper_acc, gripper_max_vel, gripper_max_acc)
+        # self.gripper.move(gripper_width, gripper_velocity, gripper_force)
     
     def update_trajectory_state(self, target_pos_list, target_vel, target_acc, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
@@ -104,16 +104,16 @@ class FlexivRobot:
     
     def init_gripper(self):
         set_mode = False
-        if self.robot['gripper_robot'] == self.mode.IDLE:
-            self.robot['gripper_robot'].setMode(self.mode.NRT_JOINT_POSITION)
+        if self.robot == self.mode.IDLE:
+            self.robot.setMode(self.mode.NRT_JOINT_POSITION)
             set_mode = True
-        self.gripper = flexivrdk.Gripper(self.robot['gripper_robot'])
+        self.gripper = flexivrdk.Gripper(self.robot)
         self.gripper_states = flexivrdk.GripperStates()
         if set_mode:
-            self.robot['gripper_robot'].setMode(self.mode.IDLE)
+            self.robot.setMode(self.mode.IDLE)
     
     def _get_gripper_state(self):
-        if self.robot['gripper_robot'] == self.mode.IDLE:
+        if self.robot == self.mode.IDLE:
             self.log.info('Gripper control is not available if the robot is in IDLE mode')
         else:
             self.gripper.getGripperStates(self.gripper_states)
@@ -127,84 +127,55 @@ class FlexivRobot:
         return round(self._get_gripper_state().width,4)
     
     def get_q(self):
-        gripper_joint = self.get_joint_pos('gripper_robot')
+        gripper_joint = self.get_joint_pos()
         gripper_width = self.get_gripper_width()
         return gripper_joint.tolist() + [gripper_width/2,gripper_width/2]
     
-    def get_ext_wrench(self,name='gripper_robot',base=True):
+    def get_ext_wrench(self,base=True):
         if base:
-            return np.array(self._get_robot_status(name).extWrenchInBase)
+            return np.array(self.robot.states().ext_wrench_in_world)
         else:
-            return np.array(self._get_robot_status(name).extWrenchInTcp)
+            return np.array(self.robot.states().ext_wrench_in_tcp)
     
-    def init_robot(self, name="gripper_robot"):
-        robot_ip = self.robot_addr[name]
-        robot = flexivrdk.Robot(robot_ip)
-        # Clear fault on robot server if any
-        if robot.isFault():
-            self.log.info("Fault occurred on robot server, trying to clear ...")
+    def init_robot(self):
+        robot_sn = self.robot_sn
+        self.robot = flexivrdk.Robot(robot_sn)
+
+        # Clear fault on the connected robot if any
+        if self.robot.fault():
+            self.log.warn("Fault occurred on the connected robot, trying to clear ...")
             # Try to clear the fault
-            robot.clearFault()
-            time.sleep(2)
-            # Check again
-            if robot.isFault():
-                self.log.info("Fault cannot be cleared, exiting ...")
-                return
-            self.log.info("Fault on robot server is cleared")
+            if not self.robot.ClearFault():
+                self.log.error("Fault cannot be cleared, exiting ...")
+                return 1
+            self.log.info("Fault on the connected robot is cleared")
 
         # Enable the robot, make sure the E-stop is released before enabling
-        self.log.info(f"Enabling {name} ...")
-        robot.enable()
+        self.log.info("Enabling robot ...")
+        self.robot.Enable()
+
+        # Enable the robot, make sure the E-stop is released before enabling
+        self.log.info(f"Enabling ...")
+        self.robot.Enable()
 
         # Wait for the robot to become operational
-        seconds_waited = 0
-        while not robot.isOperational():
+        while not self.robot.operational():
             time.sleep(1)
-            seconds_waited += 1
-            if seconds_waited == 10:
-                self.log.info("Still waiting for robot to become operational, please check that the robot 1) has no fault, 2) is in [Auto (remote)] mode.")
 
-        self.log.info(f"{name} is now operational")
-        self.robot[name] = robot
+        self.log.info("Robot is now operational")    
     
-    def enable(self, name, max_time=10):
-        """Enable robot after emergency button is released."""
-        robot = self.robot[name]
-        robot.enable()
-        tic = time.time()
-        while not self.is_operational(name):
-            if time.time() - tic > max_time:
-                return f"{name} enable failed"
-            time.sleep(0.01)
-        return
-    
-    def clear_fault(self, name):
-        self.robot[name].clearFault()
-    
-    def is_fault(self,name):
-        """Check if robot is in FAULT state."""
-        return self.robot[name].isFault()
-    
-    def is_stopped(self, name):
+    def is_stopped(self):
         """Check if robot is stopped."""
-        return self.robot[name].isStopped()
+        return self.robot.isStopped()
     
-    def is_connected(self,name):
+    def is_connected(self):
         """return if connected.
 
         Returns: True/False
         """
-        return self.robot[name].isConnected()
+        return self.robot.isConnected()    
     
-    def is_operational(self,name):
-        """Check if robot is operational."""
-        return self.robot[name].isOperational()
-    
-    def _get_robot_status(self,name):
-        self.robot[name].getRobotStates(self.robot_states[name])
-        return self.robot_states[name]
-    
-    def get_tcp_pose(self,name, matrix=False):
+    def get_tcp_pose(self, matrix=False):
         """get current robot's tool pose in world frame.
 
         Returns:
@@ -214,16 +185,16 @@ class FlexivRobot:
             RuntimeError: error occurred when mode is None.
         """
         if matrix:
-            tcppose = np.array(self._get_robot_status(name).tcpPose)
+            tcppose = np.array(self._get_robot_status().tcpPose)
             pose = np.identity(4)
             # pose[:3,:3] = Rot.from_quat(np.array(tcppose[4:].tolist()+[tcppose[3]])).as_matrix()
             # pose[:3,:3] = Rot.from_quat(tcppose[3:],scalar_first=True).as_matrix()
             pose[:3,:3] = Rot.from_quat(np.array([tcppose[4],tcppose[5],tcppose[6],tcppose[3]])).as_matrix()
             pose[:3,3] = np.array(tcppose[:3])
             return pose
-        return np.array(self._get_robot_status(name).tcpPose)
+        return np.array(self._get_robot_status().tcpPose)
     
-    def get_tcp_vel(self,name):
+    def get_tcp_vel(self):
         """get current robot's tool velocity in world frame.
 
         Returns:
@@ -232,9 +203,9 @@ class FlexivRobot:
         Raises:
             RuntimeError: error occurred when mode is None.
         """
-        return np.array(self._get_robot_status(name).tcpVel)
+        return np.array(self._get_robot_status().tcpVel)
     
-    def get_joint_pos(self,name):
+    def get_joint_pos(self):
         """get current joint value.
 
         Returns:
@@ -243,9 +214,9 @@ class FlexivRobot:
         Raises:
             RuntimeError: error occurred when mode is None.
         """
-        return np.array(self._get_robot_status(name).q)
+        return np.array(self._get_robot_status().q)
     
-    def get_joint_vel(self,name):
+    def get_joint_vel(self):
         """get current joint velocity.
 
         Returns:
@@ -254,7 +225,7 @@ class FlexivRobot:
         Raises:
             RuntimeError: error occurred when mode is None.
         """
-        return np.array(self._get_robot_status(name).dq)
+        return np.array(self._get_robot_status().dq)
     
 
 if __name__ == "__main__":
@@ -274,7 +245,6 @@ if __name__ == "__main__":
     max_vel=[0.2] * 7
     max_acc=[0.3] * 7
 
-    import pdb;pdb.set_trace()
     flexiv_robot.go_init_joint()
     flexiv_robot.set_zero_ft()
     flexiv_robot.get_ext_wrench()
