@@ -27,9 +27,10 @@ class FlexivRobot:
         self.robot_sn = robot_sn
         self.log = spdlog.ConsoleLogger("FlexivRobot")
         self.robot = None
+        self.gripper = None
 
         self.init_robot()
-        # self.init_gripper()
+        self.init_gripper()
 
         self.joint_limits_low = np.array([-2.7925, -2.2689, -2.9671, -1.8675, -2.9671, -1.3963, -2.9671]) + 0.1
         self.joint_limits_high = np.array([2.7925, 2.2689, 2.9671, 2.6878, 2.9671, 4.5379, 2.9671]) - 0.1
@@ -60,7 +61,17 @@ class FlexivRobot:
             time.sleep(1)
 
         self.log.info("Robot is now operational")    
-        
+
+    def init_gripper(self):
+        set_mode = False
+        if self.robot == self.mode.IDLE:
+            self.robot.SwitchMode(self.mode.NRT_JOINT_POSITION)
+            set_mode = True
+        self.gripper = flexivrdk.Gripper(self.robot)
+        self.gripper_states = flexivrdk.GripperStates()
+        if set_mode:
+            self.robot.SwitchMode(self.mode.IDLE)
+
     def update_joint_state(self, target_pos, target_vel=[0.0]*7 + [0.05], target_acc=[0.0]*7 + [0.05], max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
         8-dof: target [:7] gripper robot cmd, target[7] gripper cmd
@@ -127,26 +138,16 @@ class FlexivRobot:
             time.sleep(1)
         self.log.info("Sensor zeroing complete")
         self.robot.SwitchMode(self.mode.NRT_JOINT_POSITION)
-
-    def init_gripper(self):
-        set_mode = False
-        if self.robot == self.mode.IDLE:
-            self.robot.SwitchMode(self.mode.NRT_JOINT_POSITION)
-            set_mode = True
-        self.gripper = flexivrdk.Gripper(self.robot)
-        self.gripper_states = flexivrdk.GripperStates()
-        if set_mode:
-            self.robot.SwitchMode(self.mode.IDLE)
     
     def _get_gripper_state(self):
         if self.robot == self.mode.IDLE:
             self.log.info('Gripper control is not available if the robot is in IDLE mode')
         else:
             self.gripper.getGripperStates(self.gripper_states)
-            # print("width: ", round(self.gripper_states.width, 2))
-            # print("force: ", round(self.gripper_states.force, 2))
-            # print("max_width: ", round(self.gripper_states.maxWidth, 2))
-            # print("is_moving: ", self.gripper_states.isMoving)
+            print("width: ", round(self.gripper_states.width, 2))
+            print("force: ", round(self.gripper_states.force, 2))
+            print("max_width: ", round(self.gripper_states.maxWidth, 2))
+            print("is_moving: ", self.gripper_states.isMoving)
         return self.gripper_states
 
     def get_gripper_width(self):
