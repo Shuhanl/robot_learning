@@ -3,9 +3,10 @@ import numpy as np
 import cv2
 from robot.flexiv import FlexivRobot
 import matplotlib.pyplot as plt
+import time
 
 class Calibration(object):
-    def __init__(self,pattern_size=(9,6),square_size=21,handeye='EIH'):
+    def __init__(self,pattern_size=(8,6),square_size=15,handeye='EIH'):
         '''
 
         :param image_list:  image array, num*720*1280*3
@@ -17,7 +18,6 @@ class Calibration(object):
         self.pattern_size = pattern_size  # The number of inner corners of the chessboard in width and height.
         self.square_size = square_size
         self.handeye = handeye
-        self.mtx = np.load('config/franka_d415mtx.npy')
         self.init_calib()
 
     def init_calib(self):
@@ -100,18 +100,20 @@ class Calibration(object):
 if __name__ == "__main__":
     cam = RealSenseCamera()
     calib = Calibration(pattern_size=(8,6), square_size=15)
-    jointList = [[0.41219, -0.807, -0.922, -1.858, 0.168, 1.870, 0.0011],
+    flexiv_robot = FlexivRobot()
+
+    cartesian_list = [[0.41219, -0.807, -0.922, -1.858, 0.168, 1.870, 0.0011],
                 [-0.314, -1.01202, 0.180, -2.315, 0.401, 2.122, 0.589],
                 [-1.364, -1.540, 0.583, -1.33, 1.012, 1.35, 1.38]]
-    pose_list = []
+
     # Assuming cam and panda are predefined objects
-    for joint in jointList:
-        panda.moveJoint(joint)
-        current_pose = np.array(panda.robot.read_once().O_T_EE).reshape(4, 4).T
+    for cartesian in cartesian_list:
+        flexiv_robot.cartesian_motion_force_control(cartesian)
         color, depth = cam.get_data()
         cam.detect_feature(color)
-        pose_list.append(current_pose)
 
     mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
-    camT = calib.perform_hand_eye_calibration(pose_list, rvecs, tvecs)
-    np.save('config/campose20210909_franka.npy', camT)
+    mtx = cam.getIntrinsics()
+    camT = calib.perform_hand_eye_calibration(cartesian_list, rvecs, tvecs)
+    np.save('../config/camera_calib.npy', camT)
+    time.sleep(1)

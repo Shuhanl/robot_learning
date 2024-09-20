@@ -72,30 +72,29 @@ class FlexivRobot:
         if set_mode:
             self.robot.SwitchMode(self.mode.IDLE)
 
-    def update_joint_state(self, target_pos, target_vel=[0.0]*7 + [0.05], target_acc=[0.0]*7 + [0.05], max_vel=[0.2] * 7, max_acc=[0.3] * 7):
+    def move_to_home(self):
+        # Move robot to home pose
+        self.log.info("Moving to home pose")
+        self.robot.SwitchMode(self.mode.NRT_PRIMITIVE_EXECUTION)
+        self.robot.ExecutePrimitive("Home()")
+
+    def update_joint_state(self, target_pos, target_vel=[0.0]*7, target_acc=[0.0]*7, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
-        8-dof: target [:7] gripper robot cmd, target[7] gripper cmd
+        7-dof: target [:7] robot cmd
         7-dof: max_vel, max_acc
         '''
         gripper_pos, gripper_vel, gripper_acc, gripper_max_vel, gripper_max_acc = \
             target_pos[:7], target_vel[:7], target_acc[:7], max_vel[:7], max_acc[:7]
 
-        gripper_width = target_pos[7]
-        gripper_velocity = target_vel[7]
-        gripper_force = target_acc[7]
-
         gripper_pos = np.clip(np.array(gripper_pos), self.joint_limits_low, self.joint_limits_high).tolist()
         self.robot.SendJointPosition(gripper_pos, gripper_vel, gripper_acc, gripper_max_vel, gripper_max_acc)
-        # self.gripper.move(gripper_width, gripper_velocity, gripper_force)
+    
+    def update_gripper_states(self, gripper_width, gripper_velocity, gripper_force):
+        
+        self.gripper.Move(gripper_width, gripper_velocity, gripper_force)
     
 
     def go_init_joint(self):
-        # init_gripper_joints = np.array([-0.57789973, -0.70800994,  0.53129942,  1.58402704,  0.31958843, 1.0613998 , -0.79267218])
-        # init_ft_joints = np.array([1.32362411, -1.25974886, -0.91948404,  1.96467796,  0.31982947,1.62020271,  1.17286422])
-
-
-        # init_gripper_joints = np.array([-0.48694, -0.74843, 0.451392, 1.56708, 0.28096, 1.096458, -0.6841])
-        # init_ft_joints = np.array([1.381740, -1.236994, -0.93122, 2.100697, 0.37159, 1.663677, 1.17685])
 
         init_gripper_joints = np.array([-0.586136, -0.745720, 0.52749, 1.55923, 0.3157, 1.063024, -0.81544])
 
@@ -110,7 +109,7 @@ class FlexivRobot:
         self.update_joint_state(qinit, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
         # import pdb;pdb.set_trace()
     
-    def update_trajectory_state(self, target_pos_list, target_vel, target_acc, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
+    def joint_control(self, target_pos_list, target_vel, target_acc, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
         [8-dof]: target [:7] gripper robot cmd, target[7] gripper cmd
         7-dof: max_vel, max_acc
@@ -123,7 +122,11 @@ class FlexivRobot:
                 time.sleep(0.01)
                 gripper_dis, width_dis = self.get_delta_q(target_pos)
             
-    
+    def cartesian_motion_force_control(self, target_pose):
+            
+        self.robot.SwitchMode(self.mode.NRT_CARTESIAN_MOTION_FORCE)
+        self.robot.SendCartesianMotionForce(target_pose)
+
     def get_delta_q(self, target_pos):
         gripper_pos, gripper_width = target_pos[:7], target_pos[7]
         current_q = self.get_q()
@@ -173,7 +176,7 @@ class FlexivRobot:
 
         Returns: True/False
         """
-        return self.robot.isConnected()    
+        return self.robot.connected()    
     
     def get_tcp_pose(self, matrix=False):
         """get current robot's tool pose in world frame.
@@ -203,7 +206,7 @@ class FlexivRobot:
         Raises:
             RuntimeError: error occurred when mode is None.
         """
-        return np.array(self.robot().tcpVel)
+        return np.array(self.robot.states().tcpVel)
     
     def get_joint_pos(self):
         """get current joint value.
@@ -231,24 +234,19 @@ class FlexivRobot:
 if __name__ == "__main__":
     flexiv_robot = FlexivRobot()
     
-    gripper_joints = np.array([-0.00507624, -0.56437659, 0.003704, 1.504975, 0.0027480, 0.4870387, 0.011373])
-    gripper_rest_joints = np.array([0.2181339 , -0.68337023, -0.06261784,  1.70697415, -0.04558531, 1.08509004,  0.18694383])
     init_gripper_joints = np.array([-0.57789973, -0.70800994,  0.53129942,  1.58402704,  0.31958843, 1.0613998 , -0.79267218])
     
-    q1 = gripper_rest_joints.tolist() + [0.09] 
-    q2 = gripper_joints.tolist() + [0.01] 
     target_vel = [0.0]*7 + [0.05] 
     target_acc = [0.0]*7 + [10]
 
-    qinit = init_gripper_joints.tolist() + [0.09]
+    qinit = init_gripper_joints.tolist() + [0.5]
 
     max_vel=[0.2] * 7
     max_acc=[0.3] * 7
 
+    flexiv_robot.move_to_home()
     flexiv_robot.go_init_joint()
     flexiv_robot.set_zero_ft()
     flexiv_robot.get_ext_wrench()
 
     flexiv_robot.update_joint_state(qinit, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
-    flexiv_robot.update_joint_state(q1, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
-    flexiv_robot.update_joint_state(q2, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
