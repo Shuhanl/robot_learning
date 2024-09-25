@@ -93,10 +93,31 @@ class FlexivRobot:
         joint_pos = np.clip(np.array(joint_pos), self.joint_limits_low, self.joint_limits_high).tolist()
         self.robot.SendJointPosition(joint_pos, joint_vel, joint_acc, joint_max_vel, joint_max_acc)
             
-    def cartesian_motion_force_control(self, target_pose):
+    def cartesian_motion_force_control(self, target_pose, is_euler=False):
+        """
+        Perform Cartesian motion force control.
+
+        Args:
+            target_pose: 6D (x, y, z, roll, pitch, yaw) if `is_euler=True`, or 7D (x, y, z, rw, rx, ry, rz) if `is_euler=False`.
+            is_euler (bool): If True, the target pose is given as Euler angles (roll, pitch, yaw).
+                            If False, the target pose is provided as a quaternion (rw, rx, ry, rz).
+        """
+        
+        if is_euler:
+            euler_angles = target_pose[3:]  # Extract the Euler angles (roll, pitch, yaw)
             
+            # Convert Euler angles to quaternion
+            rotation = Rot.from_euler('xyz', euler_angles, degrees=False)  # Assuming radians input
+            quaternion = rotation.as_quat()  # Quaternion as [rx, ry, rz, rw]
+            
+            # Convert quaternion to [rw, rx, ry, rz] format expected by the robot
+            target_pose_quat = np.concatenate([target_pose[:3], [quaternion[3], quaternion[0], quaternion[1], quaternion[2]]])
+            
+        else:
+            target_pose_quat = target_pose
+
         self.robot.SwitchMode(self.mode.NRT_CARTESIAN_MOTION_FORCE)
-        self.robot.SendCartesianMotionForce(target_pose)
+        self.robot.SendCartesianMotionForce(target_pose_quat)
 
     def gripper_control(self, gripper_width, gripper_velocity, gripper_force):
         self.gripper.Move(gripper_width, gripper_velocity, gripper_force)
@@ -134,23 +155,38 @@ class FlexivRobot:
         """
         return self.robot.connected()    
     
-    def get_tcp_pose(self, matrix=False):
-        """get current robot's tool pose in world frame.
+    def get_tcp_pose(self, matrix=False, euler=False):
+        """Get current robot's tool pose in world frame.
 
+        Args:
+            matrix (bool): If True, return the pose as a 4x4 transformation matrix.
+            euler (bool): If True, return the pose with Euler angles (x, y, z, roll, pitch, yaw).
+        
         Returns:
-            7-dim list consisting of (x,y,z,rw,rx,ry,rz)
+            If matrix is True: 4x4 transformation matrix.
+            If euler is True: 6D pose (x, y, z, roll, pitch, yaw) using Euler angles.
+            Else: 7D list consisting of (x, y, z, rw, rx, ry, rz) using quaternions.
 
         Raises:
-            RuntimeError: error occurred when mode is None.
+            RuntimeError: Error occurred when mode is None.
         """
-        if matrix:
-            tcppose = np.array(self.robot.states().tcp_pose)
-            pose = np.identity(4)
-            pose[:3,:3] = Rot.from_quat(np.array([tcppose[4],tcppose[5],tcppose[6],tcppose[3]])).as_matrix()
-            pose[:3,3] = np.array(tcppose[:3])
-            return pose
+        tcppose = np.array(self.robot.states().tcp_pose)
         
-        return np.array(self.robot.states().tcp_pose)
+        # If matrix option is selected, return the pose as a 4x4 transformation matrix
+        if matrix:
+            pose = np.identity(4)
+            pose[:3, :3] = Rot.from_quat([tcppose[4], tcppose[5], tcppose[6], tcppose[3]]).as_matrix()
+            pose[:3, 3] = tcppose[:3]
+            return pose
+
+        # If euler option is selected, convert quaternion to Euler angles
+        if euler:
+            rotation = Rot.from_quat([tcppose[4], tcppose[5], tcppose[6], tcppose[3]])  # Quaternion as [x, y, z, w]
+            euler_angles = rotation.as_euler('xyz', degrees=False)  # Euler angles in radians (roll, pitch, yaw)
+            return np.concatenate([tcppose[:3], euler_angles])  # Return [x, y, z, roll, pitch, yaw]
+        
+        # Default: return pose as 7D list (x, y, z, rw, rx, ry, rz)
+        return tcppose
     
     def get_tcp_vel(self):
         """get current robot's tool velocity in world frame.

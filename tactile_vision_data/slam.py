@@ -1,6 +1,7 @@
 from camera.camera import RealSenseCamera
-# from robot.flexiv import FlexivRobot
+from robot.flexiv import FlexivRobot
 import numpy as np
+import time
 
 class SLAM(object):
     def __init__(self):
@@ -12,18 +13,31 @@ class SLAM(object):
 if __name__ == "__main__":
     cam = RealSenseCamera()
     camIntrinsics = cam.getIntrinsics()
-    # flexiv_robot = FlexivRobot()
+    flexiv_robot = FlexivRobot()
     slam = SLAM()
 
-    jointList = [[0.41219, -0.807, -0.922, -1.858, 0.168, 1.870, 0.0011],
-                 [-0.314, -1.01202, 0.180, -2.315, 0.401, 2.122, 0.589]]
+    flexiv_robot.move_to_home()
+    flexiv_robot.set_zero_ft()
+    home_pose = flexiv_robot.get_tcp_pose(euler=True)
+    x, y, z, roll, pitch, yaw = home_pose
 
+    position_swing = 0.05
+    rotation_swing = 0.2
+    
+    calib_poses = [
+        [x, y, z, roll, pitch, yaw],  # Home pose (base)
+        [x + position_swing, y, z, roll, pitch - rotation_swing, yaw],  
+        [x - position_swing, y, z, roll, pitch + rotation_swing, yaw], 
+        [x, y + position_swing, z, roll + rotation_swing, pitch, yaw],  
+        [x, y - position_swing, z, roll - rotation_swing, pitch, yaw],  
+    ]
 
-    for i, joint in enumerate(jointList):
-        # robot_pose = flexiv_robot.get_tcp_pose()
+    for pose in calib_poses:
+        flexiv_robot.cartesian_motion_force_control(pose, is_euler=True)
         color, depth = cam.get_data(hole_filling=False)
         xyzrgb = cam.getXYZRGB(color, depth, camIntrinsics, np.identity(4), np.identity(4), inpaint=False)
         slam.add_point_cloud(xyzrgb)
+        time.sleep(1)
 
     np.save('xyzrgb.npy',slam.point_clouds)
 

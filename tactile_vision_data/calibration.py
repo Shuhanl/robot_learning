@@ -115,14 +115,26 @@ if __name__ == "__main__":
     calib = Calibration(pattern_size=(9,6), square_size=21)
     flexiv_robot = FlexivRobot()
 
-    cartesian_list = [[0.69569635, -0.10836965,  0.14336556,  0.01396798, -0.00246993,  0.99989706,  0.00214556],
-                      [0.59569635, -0.10836965,  0.14336556,  0.01396798, -0.00246993,  0.99989706,  0.00214556],
-                      [0.69569635, -0.00836965,  0.14336556,  0.01396798, -0.00246993,  0.99989706,  0.00214556]]
+    flexiv_robot.move_to_home()
+    flexiv_robot.set_zero_ft()
+    home_pose = flexiv_robot.get_tcp_pose(euler=True)
+    x, y, z, roll, pitch, yaw = home_pose
+
+    position_swing = 0.05
+    rotation_swing = 0.2
+    
+    calib_poses = [
+        [x, y, z, roll, pitch, yaw],  # Home pose (base)
+        [x + position_swing, y, z, roll, pitch - rotation_swing, yaw],  
+        [x - position_swing, y, z, roll, pitch + rotation_swing, yaw], 
+        [x, y + position_swing, z, roll + rotation_swing, pitch, yaw],  
+        [x, y - position_swing, z, roll - rotation_swing, pitch, yaw],  
+    ]
 
     robot_poses = []
     # Assuming cam and panda are predefined objects
-    for cartesian in cartesian_list:
-        flexiv_robot.cartesian_motion_force_control(cartesian)
+    for pose in calib_poses:
+        flexiv_robot.cartesian_motion_force_control(pose, is_euler=True)
         robot_poses.append(flexiv_robot.get_tcp_pose(matrix = True))
         color, depth = cam.get_data()
         calib.detect_feature(color)
