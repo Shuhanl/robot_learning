@@ -103,6 +103,18 @@ class Calibration(object):
         robot_poses = np.array(robot_poses)
         camera_transforms = [self.rodrigues_trans2tr(rvec, tvec / 1000.) for rvec, tvec in zip(rvecs, tvecs)]
         camera_transforms = np.array(camera_transforms)
+
+
+        # Ensure the sizes are consistent
+        num_robot_poses = robot_poses.shape[0]
+        num_camera_transforms = camera_transforms.shape[0]
+    
+        print(f"Number of robot poses: {num_robot_poses}")
+        print(f"Number of camera transforms: {num_camera_transforms}")
+    
+        if num_robot_poses != num_camera_transforms:
+            raise ValueError(f"Mismatch in number of robot poses ({num_robot_poses}) and camera transforms ({num_camera_transforms}). They must be equal.")
+        
         rot, pos = cv2.calibrateHandEye(robot_poses[:, :3, :3], robot_poses[:, :3, 3], camera_transforms[:, :3, :3], camera_transforms[:, :3, 3])
         camT = np.identity(4)
         camT[:3, :3] = rot
@@ -119,26 +131,29 @@ if __name__ == "__main__":
     flexiv_robot.set_zero_ft()
     home_pose = flexiv_robot.get_tcp_pose(euler=True)
     x, y, z, roll, pitch, yaw = home_pose
+    x = x - 0.15
+    z = z + 0.25
 
-    position_swing = 0.05
-    rotation_swing = 0.2
+    position_swing = 0.15
+    rotation_swing = 0.22
     
     calib_poses = [
-        [x, y, z, roll, pitch, yaw],  # Home pose (base)
-        [x + position_swing, y, z, roll, pitch - rotation_swing, yaw],  
+        [x, y, z, roll, pitch, yaw],  
+        [x + position_swing, y, z, roll, pitch - rotation_swing, yaw + rotation_swing],  
         [x - position_swing, y, z, roll, pitch + rotation_swing, yaw], 
-        [x, y + position_swing, z, roll + rotation_swing, pitch, yaw],  
+        [x, y + position_swing, z- 0.1, roll + rotation_swing, pitch, yaw],  
         [x, y - position_swing, z, roll - rotation_swing, pitch, yaw],  
     ]
 
     robot_poses = []
-    # Assuming cam and panda are predefined objects
+
     for pose in calib_poses:
         flexiv_robot.cartesian_motion_force_control(pose, is_euler=True)
         robot_poses.append(flexiv_robot.get_tcp_pose(matrix = True))
+        time.sleep(1)
         color, depth = cam.get_data()
         calib.detect_feature(color)
-        time.sleep(1)
+
 
     mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
     mtx = cam.getIntrinsics()
