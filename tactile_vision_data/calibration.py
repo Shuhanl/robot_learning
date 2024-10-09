@@ -12,7 +12,7 @@ class Calibration(object):
         :param image_list:  image array, num*720*1280*3
         :param pose_list: pose array, num*4*4
         :param pattern_size: calibration pattern size
-        :param square_size: calibration pattern square size, 15mm
+        :param square_size: calibration pattern square size
         :param handeye:
         '''
         self.pattern_size = pattern_size  # The number of inner corners of the chessboard in width and height.
@@ -30,6 +30,7 @@ class Calibration(object):
         self.objpoints = []  # 3d point in real world space
         self.imgpoints = []  # 2d points in image plane.
         self.criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+
 
     def detect_feature(self,img):
 
@@ -101,9 +102,8 @@ class Calibration(object):
         '''
 
         robot_poses = np.array(robot_poses)
-        camera_transforms = [self.rodrigues_trans2tr(rvec, tvec / 1000.) for rvec, tvec in zip(rvecs, tvecs)]
+        camera_transforms = [self.rodrigues_trans2tr(rvec, tvec / 1000) for rvec, tvec in zip(rvecs, tvecs)]
         camera_transforms = np.array(camera_transforms)
-
 
         # Ensure the sizes are consistent
         num_robot_poses = robot_poses.shape[0]
@@ -129,33 +129,32 @@ if __name__ == "__main__":
 
     flexiv_robot.move_to_home()
     flexiv_robot.set_zero_ft()
-    home_pose = flexiv_robot.get_tcp_pose(euler=True)
+    home_pose = flexiv_robot.get_tcp_pose(euler=True, degree=True)
     x, y, z, roll, pitch, yaw = home_pose
     x = x - 0.15
     z = z + 0.25
 
     position_swing = 0.15
-    rotation_swing = 0.22
+    rotation_swing = 12
     
     calib_poses = [
         [x, y, z, roll, pitch, yaw],  
         [x + position_swing, y, z, roll, pitch - rotation_swing, yaw + rotation_swing],  
         [x - position_swing, y, z, roll, pitch + rotation_swing, yaw], 
-        [x, y + position_swing, z- 0.1, roll + rotation_swing, pitch, yaw],  
+        [x, y + position_swing, z, roll + rotation_swing, pitch, yaw],  
         [x, y - position_swing, z, roll - rotation_swing, pitch, yaw],  
     ]
 
     robot_poses = []
-
     for pose in calib_poses:
-        flexiv_robot.cartesian_motion_force_control(pose, is_euler=True)
+        flexiv_robot.cartesian_motion_force_control(pose)
         robot_poses.append(flexiv_robot.get_tcp_pose(matrix = True))
         time.sleep(1)
         color, depth = cam.get_data()
         calib.detect_feature(color)
 
-
     mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
     mtx = cam.getIntrinsics()
     camT = calib.perform_hand_eye_calibration(robot_poses, rvecs, tvecs)
+    print("Camera Calibration:", camT)
     np.save('config/camera_calib.npy', camT)

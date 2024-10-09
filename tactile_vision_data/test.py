@@ -2,7 +2,7 @@ from scipy.spatial.transform import Rotation as Rot
 import numpy as np
 import matplotlib.pyplot as plt
 
-def generate_combined_trajectory_with_arc(self, object_position, num_points_per_segment=20, xy_variation = 0.6, height_variation=0.3):
+def generate_combined_trajectory_with_arc(object_position, num_points_per_segment=20, xy_variation = 0.6, height_variation=0.3):
     '''
     Generates a combined trajectory with three segments: 
     1. Move across the object in the x direction from the bottom, rising to the top, and descending back down.

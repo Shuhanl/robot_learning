@@ -1,6 +1,5 @@
 import numpy as np
 import open3d as o3d
-
 class ProcessPointCloud(object):
     def __init__(self):
         print("init")
@@ -42,19 +41,21 @@ class ProcessPointCloud(object):
                 
         return normals
 
-    def process(self, xyzrgbs):
-
-        """ Converts numpy array to Open3D point cloud and stores it. """
+    def process(self, data):
+        """ Loads point clouds from an .npz file and converts them to Open3D point clouds. """
         point_clouds = []
-        for xyzrgb in xyzrgbs:
+        
+        # Iterate through each point cloud in the .npz file
+        for key in data:
+            xyzrgb = data[key]  # Load each point cloud
             point_cloud = o3d.geometry.PointCloud()
-            point_cloud.points = o3d.utility.Vector3dVector(xyzrgb[:, :3])  # Assumes xyz are the first three columns
-            point_cloud.colors = o3d.utility.Vector3dVector(xyzrgb[:, 3:6])  # Assumes rgb are the next three columns
+            point_cloud.points = o3d.utility.Vector3dVector(xyzrgb[:, :3])  # xyz coordinates
+            point_cloud.colors = o3d.utility.Vector3dVector(xyzrgb[:, 3:6])  # rgb colors
             point_clouds.append(point_cloud)
 
-        for i in range(1, len(point_clouds)):
-            point_clouds[i].points = self.icp_pointcloud(point_clouds[i], point_clouds[i-1])
-            point_clouds[i].normals = self.cal_norm(point_clouds[i])
+        # for i in range(1, len(point_clouds)):
+        #     point_clouds[i].points = self.icp_pointcloud(point_clouds[i], point_clouds[i-1])
+        #     point_clouds[i].normals = self.cal_norm(point_clouds[i])
  
         # Combine all processed point clouds into one
         combined_pcd = o3d.geometry.PointCloud()
@@ -63,16 +64,15 @@ class ProcessPointCloud(object):
 
         return combined_pcd
 
-    def vis_pc(self, pc):
-        pc1 = o3d.geometry.PointCloud()
-        pc1.points = o3d.utility.Vector3dVector(pc)
-        o3d.visualization.draw_geometries([pc1])
+    def vis_pc(self, point_cloud):
+        """ Visualizes the given point cloud using Open3D """
+        o3d.visualization.draw_geometries([point_cloud])
 
 if __name__ == "__main__":
 
     process_point_cloud = ProcessPointCloud()
-    xyzrgbs = np.load("xyzrgb.npy")
-    combined_pcd = process_point_cloud.process(xyzrgbs)
-    process_point_cloud.vis_pc(combined_pcd.points)
+    data = np.load("xyzrgb.npz")
+    combined_pcd = process_point_cloud.process(data)
+    process_point_cloud.vis_pc(combined_pcd)
 
 

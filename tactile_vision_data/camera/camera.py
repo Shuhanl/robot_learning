@@ -101,36 +101,53 @@ class RealSenseCamera(object):
             break
         return color_image, depth_image
 
-    def getXYZRGB(self, color, depth, camIntrinsics, robot_pose, camera_pose, inpaint=True):
+    def getXYZRGB(self, color, depth, camIntrinsics, robot_pose, camera_pose, max_depth=0.5, inpaint=True):
         '''
+        Converts color and depth images into a 3D point cloud (XYZRGB), filtering points based on depth.
 
-        :param color:
-        :param depth:
-        :param robot_pose: array 4*4
-        :param camera_pose: array 4*4
-        :param camIntrinsics: array 3*3
-        :param inpaint: bool
-        :return: xyzrgb
+        :param color: Color image.
+        :param depth: Depth image.
+        :param robot_pose: Robot's 4x4 transformation matrix.
+        :param camera_pose: 4x4 transformation matrix for the camera.
+        :param camIntrinsics: Intrinsic parameters of the camera.
+        :param max_depth: Maximum allowable depth (in meters) for filtering.
+        :param inpaint: Boolean to indicate whether to inpaint the depth image.
+        :return: A numpy array containing filtered 3D points (XYZ) and color information (RGB).
         '''
         heightIMG, widthIMG, _ = color.shape
-        depthImg = depth / 1000.
+        depthImg = depth / 1000.0  # Convert depth from millimeters to meters
+
         if inpaint:
             depthImg = self.inpaint(depthImg)
-        robot_pose = np.dot(robot_pose, camera_pose)
 
+        # Combine robot pose and camera pose to get the full transformation
+        full_pose = np.dot(robot_pose, camera_pose)
+        print(full_pose)
+
+        # Generate pixel grid
         [pixX, pixY] = np.meshgrid(np.arange(widthIMG), np.arange(heightIMG))
+
+        # Convert pixel coordinates to camera coordinates
         camX = (pixX - camIntrinsics[0][2]) * depthImg / camIntrinsics[0][0]
         camY = (pixY - camIntrinsics[1][2]) * depthImg / camIntrinsics[1][1]
         camZ = depthImg
 
-        camPts = [camX.reshape(camX.shape + (1,)), camY.reshape(camY.shape + (1,)), camZ.reshape(camZ.shape + (1,))]
-        camPts = np.concatenate(camPts, 2)
-        camPts = camPts.reshape((camPts.shape[0] * camPts.shape[1], camPts.shape[2]))  # shape = (heightIMG*widthIMG, 3)
-        worldPts = np.dot(robot_pose[:3, :3], camPts.transpose()) + robot_pose[:3, 3].reshape(3,
-                                                                                              1)  # shape = (3, heightIMG*widthIMG)
-        rgb = color.reshape((-1, 3)) / 255.
-        xyzrgb = np.hstack((worldPts.T, rgb))
-        return xyzrgb        
+        # Stack camX, camY, and camZ into a 3D point cloud
+        camPts = np.stack((camX, camY, camZ), axis=-1).reshape(-1, 3)
+
+        # Apply depth filtering by removing points with a z-coordinate greater than max_depth
+        valid_idx = camPts[:, 2] <= max_depth  # Check if the depth (z) is less than or equal to max_depth
+        camPts = camPts[valid_idx]  # Keep only valid points
+        rgb = color.reshape((-1, 3))[valid_idx] / 255.0  # Keep corresponding RGB values for valid points
+
+        # Transform points from camera coordinates to world coordinates
+        worldPts = (full_pose[:3, :3] @ camPts.T + full_pose[:3, 3].reshape(3, 1)).T
+
+        # Combine XYZ and RGB
+        xyzrgb = np.hstack((worldPts, rgb))
+
+        return xyzrgb
+      
     
     def release(self):
         # Stop the pipeline
@@ -146,7 +163,4 @@ if __name__ == "__main__":
     plt.imshow(color)
     plt.show()
 
-    depth_sensor = cam.pipeline_profile.get_device().first_depth_sensor()
-    depth_scale = depth_sensor.get_depth_scale()
-    print("Depth scale is: ", depth_scale)
 

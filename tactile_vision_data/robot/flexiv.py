@@ -30,7 +30,6 @@ class FlexivRobot:
         self.gripper = None
 
         self.init_robot()
-        # self.init_gripper()
 
         self.joint_limits_low = np.array([-2.7925, -2.2689, -2.9671, -1.8675, -2.9671, -1.3963, -2.9671]) + 0.1
         self.joint_limits_high = np.array([2.7925, 2.2689, 2.9671, 2.6878, 2.9671, 4.5379, 2.9671]) - 0.1
@@ -81,53 +80,63 @@ class FlexivRobot:
         while self.robot.busy():
             time.sleep(1)
         
-    def joint_control(self, target_pos, target_vel, target_acc, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
+    def joint_control(self, target_pose, target_vel, target_acc, max_vel=[0.2] * 7, max_acc=[0.3] * 7):
         '''
         [7-dof]: target [:7] gripper robot cmd
         7-dof: max_vel, max_acc
         '''
         self.robot.SwitchMode(self.mode.NRT_JOINT_POSITION)
         joint_pos, joint_vel, joint_acc, joint_max_vel, joint_max_acc = \
-            target_pos[:7], target_vel[:7], target_acc[:7], max_vel[:7], max_acc[:7]
+            target_pose[:7], target_vel[:7], target_acc[:7], max_vel[:7], max_acc[:7]
 
         joint_pos = np.clip(np.array(joint_pos), self.joint_limits_low, self.joint_limits_high).tolist()
         self.robot.SendJointPosition(joint_pos, joint_vel, joint_acc, joint_max_vel, joint_max_acc)
+
+        actual_pose = self.get_joint_pos()
+        q_diff = np.max(np.abs(np.array(target_pose) - actual_pose))
+
+        while q_diff > 0.02:
+            time.sleep(0.01)
+            actual_pose = self.get_q()
+            q_diff = np.max(np.abs(np.array(target_pose) - np.array(actual_pose)))
+
             
-    def cartesian_motion_force_control(self, target_pose, is_euler=False):
+    def cartesian_motion_force_control(self, target_pose, vel = 0.05, angleVel=10):
         """
         Perform Cartesian motion force control.
 
         Args:
-            target_pose: 6D (x, y, z, roll, pitch, yaw) if `is_euler=True`, or 7D (x, y, z, rw, rx, ry, rz) if `is_euler=False`.
-            is_euler (bool): If True, the target pose is given as Euler angles (roll, pitch, yaw).
-                            If False, the target pose is provided as a quaternion (rw, rx, ry, rz).
+            target_pose: 6D (x, y, z, roll, pitch, yaw), or 7D (x, y, z, rw, rx, ry, rz)
         """
         
-        if is_euler:
-            euler_angles = target_pose[3:]  # Extract the Euler angles (roll, pitch, yaw)
-            
-            # Convert Euler angles to quaternion
-            rotation = Rot.from_euler('xyz', euler_angles, degrees=False)  # Assuming radians input
-            quaternion = rotation.as_quat()  # Quaternion as [rx, ry, rz, rw]
-            
-            # Convert quaternion to [rw, rx, ry, rz] format expected by the robot
-            target_pose_quat = np.concatenate([target_pose[:3], [quaternion[3], quaternion[0], quaternion[1], quaternion[2]]])
-            
+        target_pose_euler = []
+        if len(target_pose)==7:
+            translation = np.array(target_pose[:3])  # [x, y, z]
+            quaternion = target_pose[3:]  # [qw, qx, qy, qz]
+            euler_angles = self.quat2eulerZYX(quaternion, degree=True)
+            target_pose_euler = np.concatenate([translation, euler_angles])
         else:
-            target_pose_quat = target_pose
+            target_pose_euler = target_pose
 
-        self.robot.SwitchMode(self.mode.NRT_CARTESIAN_MOTION_FORCE)
-        self.robot.SendCartesianMotionForce(target_pose_quat)
+        self.robot.SwitchMode(self.mode.NRT_PRIMITIVE_EXECUTION)
+        self.robot.ExecutePrimitive("MoveL(target=" + 
+                    self.list2str(target_pose_euler) + "WORLD WORLD_ORIGN," + 
+                    "vel=" + str(vel) + "," + "angleVel=" + str(angleVel) + ")")
+
+        # Wait for reached target
+        while self.parse_pt_states(self.robot.primitive_states(), "reachedTarget") != "1":
+            time.sleep(1)
 
     def gripper_control(self, gripper_width, gripper_velocity, gripper_force):
         self.gripper.Move(gripper_width, gripper_velocity, gripper_force)
 
-    def get_delta_q(self, target_pos):
-        gripper_pos, gripper_width = target_pos[:7], target_pos[7]
-        current_q = self.get_q()
-        gripper_dis = np.max(np.abs(np.array(current_q[:7]) - np.array(gripper_pos)))
-        width_dis = np.abs(current_q[7]*2 - gripper_width)
-        return gripper_dis,width_dis
+        actual_width, actual_force = self.get_gripper_states()
+        width_diff, force_diff = abs(gripper_width-actual_width), abs(gripper_force-actual_force)
+
+        while width_diff > 0.01 or force_diff > 0.2:
+            time.sleep(0.01)
+            actual_width, actual_force = self.get_gripper_states()
+            width_diff, force_diff = abs(gripper_width-actual_width), abs(gripper_force-actual_force)
 
     def set_zero_ft(self):
         self.robot.SwitchMode(self.mode.NRT_PRIMITIVE_EXECUTION)
@@ -155,7 +164,7 @@ class FlexivRobot:
         """
         return self.robot.connected()    
     
-    def get_tcp_pose(self, matrix=False, euler=False):
+    def get_tcp_pose(self, matrix=False, euler=False, degree=False):
         """Get current robot's tool pose in world frame.
 
         Args:
@@ -181,10 +190,12 @@ class FlexivRobot:
 
         # If euler option is selected, convert quaternion to Euler angles
         if euler:
-            rotation = Rot.from_quat([tcppose[4], tcppose[5], tcppose[6], tcppose[3]])  # Quaternion as [x, y, z, w]
-            euler_angles = rotation.as_euler('xyz', degrees=False)  # Euler angles in radians (roll, pitch, yaw)
-            return np.concatenate([tcppose[:3], euler_angles])  # Return [x, y, z, roll, pitch, yaw]
-        
+            translation = np.array(tcppose[:3])  # [x, y, z]
+            quaternion = tcppose[3:]  # [qw, qx, qy, qz]
+            euler_angles = self.quat2eulerZYX(quaternion, degree)
+
+            return np.concatenate([translation, euler_angles])
+
         # Default: return pose as 7D list (x, y, z, rw, rx, ry, rz)
         return tcppose
     
@@ -220,7 +231,83 @@ class FlexivRobot:
             RuntimeError: error occurred when mode is None.
         """
         return np.array(self.robot.states().dq)
-    
+
+    def quat2eulerZYX(self, quat, degree=False):
+        """
+        Convert quaternion to Euler angles with ZYX axis rotations.
+
+        Parameters
+        ----------
+        quat : float list
+            Quaternion input in [w,x,y,z] order.
+        degree : bool
+            Return values in degrees, otherwise in radians.
+
+        Returns
+        ----------
+        float list
+            Euler angles in [x,y,z] order, radian by default unless specified otherwise.
+        """
+
+        # Convert target quaternion to Euler ZYX using scipy package's 'xyz' extrinsic rotation
+        # NOTE: scipy uses [x,y,z,w] order to represent quaternion
+        eulerZYX = (
+            Rot.from_quat([quat[1], quat[2], quat[3], quat[0]])
+            .as_euler("xyz", degrees=degree)
+            .tolist()
+        )
+
+        return eulerZYX
+
+
+    def list2str(self, ls):
+        """
+        Convert a list to a string.
+
+        Parameters
+        ----------
+        ls : list
+            Source list of any size.
+
+        Returns
+        ----------
+        str
+            A string with format "ls[0] ls[1] ... ls[n] ", i.e. each value
+            followed by a space, including the last one.
+        """
+
+        ret_str = ""
+        for i in ls:
+            ret_str += str(i) + " "
+        return ret_str
+
+
+    def parse_pt_states(self, pt_states, parse_target):
+        """
+        Parse the value of a specified primitive state from the pt_states string list.
+
+        Parameters
+        ----------
+        pt_states : str list
+            Primitive states string list returned from Robot::primitive_states().
+        parse_target : str
+            Name of the primitive state to parse for.
+
+        Returns
+        ----------
+        str
+            Value of the specified primitive state in string format. Empty string is
+            returned if parse_target does not exist.
+        """
+        for state in pt_states:
+            # Split the state sentence into words
+            words = state.split()
+
+            if words[0] == parse_target:
+                return words[-1]
+
+        return ""
+
 
 if __name__ == "__main__":
     flexiv_robot = FlexivRobot()
@@ -229,14 +316,15 @@ if __name__ == "__main__":
     flexiv_robot.set_zero_ft()
     ext_wrench = flexiv_robot.get_ext_wrench()
     print("External wrench:", ext_wrench)
-    tcp_pose = flexiv_robot.get_tcp_pose()
+    tcp_pose = flexiv_robot.get_tcp_pose(euler=True, degree=True)
     print("TCP pose:", tcp_pose)
+    flexiv_robot.init_gripper()
     gripper_states = flexiv_robot.get_gripper_states()
     print("Gripper states:", gripper_states)
 
-    cartesian_list = [[0.69569635, -0.10836965,  0.14336556,  0.01396798, -0.00246993,  0.99989706,  0.00214556],
-                      [0.59569635, -0.10836965,  0.14336556,  0.01396798, -0.00246993,  0.99989706,  0.00214556],
-                      [0.69569635, -0.00836965,  0.14336556,  0.01396798, -0.00246993,  0.99989706,  0.00214556]]
+    cartesian_list = [[0.65, -0.3, 0.2, 180, 0, 180],
+                      [0.65, 0, 0.2, 180, 0, 180],
+                      [0.65, -0.3, 0.3, 180, 0, 180]]
     
     for cartesian in cartesian_list:
         flexiv_robot.cartesian_motion_force_control(cartesian)
