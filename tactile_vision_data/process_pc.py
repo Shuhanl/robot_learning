@@ -1,5 +1,6 @@
 import numpy as np
 import open3d as o3d
+import copy
 class ProcessPointCloud(object):
     def __init__(self):
         print("init")
@@ -19,11 +20,14 @@ class ProcessPointCloud(object):
             estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(),
             criteria=o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000)
         )
-        # Apply the transformation to the source point cloud
-        source_pcd.transform(icp_result.transformation)
-        aligned_source = np.asarray(source_pcd.points)
 
-        return aligned_source
+        # Create a copy of the source point cloud
+        source_pcd_transformed = copy.deepcopy(source_pcd)
+
+        # Apply the transformation to the copied point cloud
+        source_pcd_transformed.transform(icp_result.transformation)
+
+        return source_pcd_transformed
 
     def cal_norm(self, point_cloud):
                 
@@ -34,10 +38,15 @@ class ProcessPointCloud(object):
         # This can be useful if the normals are oriented inconsistently across the cloud
         point_cloud.orient_normals_towards_camera_location(camera_location=np.array([0,0,0]))
         
-        # Flip normals that point below the horizontal plane (assumed)
+        # Convert the normals to a NumPy array for processing
         normals = np.asarray(point_cloud.normals)
-        if normals[2] < 0:
-            normals = -normals
+
+        # Find indices where the z-component of the normal is negative
+        negative_z = normals[:, 2] < 0
+
+        # Flip the normals that have a negative z-component
+        normals[negative_z] = -normals[negative_z]
+        normals = o3d.utility.Vector3dVector(normals)
                 
         return normals
 
@@ -53,9 +62,9 @@ class ProcessPointCloud(object):
             point_cloud.colors = o3d.utility.Vector3dVector(xyzrgb[:, 3:6])  # rgb colors
             point_clouds.append(point_cloud)
 
-        # for i in range(1, len(point_clouds)):
-        #     point_clouds[i].points = self.icp_pointcloud(point_clouds[i], point_clouds[i-1])
-        #     point_clouds[i].normals = self.cal_norm(point_clouds[i])
+        for i in range(1, len(point_clouds)):
+            point_clouds[i] = self.icp_pointcloud(point_clouds[i], point_clouds[i-1])
+            point_clouds[i].normals = self.cal_norm(point_clouds[i])
  
         # Combine all processed point clouds into one
         combined_pcd = o3d.geometry.PointCloud()
