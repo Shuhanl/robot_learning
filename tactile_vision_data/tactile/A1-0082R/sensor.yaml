@@ -1,0 +1,159 @@
+version: 3.1.3
+
+SN: A1-0082R
+
+pipeline:
+- name: InputSource
+  threads: 1
+  config:
+    inputType: 0     # 0:usb   1:csi   2:video
+    inputSrc: 0
+    maxFPS: 999
+    width: 1920
+    height: 1080
+    framesSkip: 60
+    framesStep: 1
+    flipX: true
+    flipY: false
+    autoExposure: false
+    manualExposure: -5
+    autoWhiteBalance: true
+    manualWhiteBalance: 4800
+- name: DMP_by_Zhang
+  threads: 1
+  config:
+    numberOfMarkers: 400
+    fastMode: false
+    BG_Threshold: 80
+    BG_XHatSize: 50
+    BG_color: 0      # 0:black   1:white
+    blurSize: 5
+    minContourArea: 16
+    movementRange: 25
+    nx: 20
+    ny: 20
+    drawDisplacements: true
+    quickMatch:
+      width: 1920
+      height: 1080
+      cellDepth: 15
+      divX: 200
+      divY: 150
+    dynamicCompensation:
+      enabled: true
+      stopTime: 300
+      applyTo2D: false      # 使用3D动态补偿时，此项必须为false！
+      markRefPoints: true
+      smooth: 0.98
+      searchDiv: 3
+      blocks:
+      - start: 1
+        end: 400
+      - start: 401
+        end: 800
+- name: Displacements_by_Feng
+  threads: 1
+  config:
+    numberOfMarkers: 400
+    useDC: true          # 是否使用3D动态补偿，若使用，则DMP_by_Zhang的dynamicCompensation->enabled必须为true，且block中必须提供左右两视角的RefPoints
+    DC_ratio: 1.0
+    calibration:
+      debug: false
+      nx: 8
+      ny: 11
+      csize: 1.5
+      cz: 6
+- name: CalibrationManager
+  threads: 1
+  config:
+    meanFrames: 30
+    startUpFrame: 200
+    dynaInitPos:
+      enabled: false
+      DIP_alpha: 0.90
+      smoothDisplacements: 0.5
+      rangeThreshold: 0.030
+- name: SmoothFilter
+  threads: 1
+  config:
+    filters:
+    - fieldName: 3D_Positions
+      method: LowPass
+      alpha: 0.5
+    - fieldName: 3D_Displacements
+      method: Mean
+    - fieldName: 3D_Displacements
+      method: LowPass
+      alpha: 0.5
+- name: Force_by_Zhang
+  threads: 1
+  config:
+    dD: 0
+    dE: 0.3399999999999999
+    dP: 1.14
+    dX: -0.2
+    dY: -0.30000000000000004
+    calibrateX: 1.0007789485090697
+    calibrateY: 1.000546222522149
+    calibrateZ: 1.0004644413150174
+    matrixKPath: default
+- name: SmoothFilter
+  threads: 1
+  config:
+    filters:
+    - fieldName: 3D_Forces
+      method: ForceCorrection
+      threshold: -0.01
+      alpha: 0.005
+- name: NetworkTransport_SDK
+  threads: 1
+  config:
+    enabled: false
+    remoteIP: 127.0.0.1
+    remotePort: 9988
+    sendData:
+    - fieldName: 3D_Displacements
+      type: mat
+    - fieldName: 3D_Positions
+      type: mat
+    - fieldName: 3D_Forces
+      type: mat
+    - fieldName: 3D_ResultantForce
+      type: mat
+    - fieldName: 3D_ResultantMoment
+      type: mat
+    - fieldName: InitializeProgress
+      type: f64
+- name: NetworkTransport
+  threads: 1
+  config:
+    enabled: true
+    remoteIP: 127.0.0.1
+    remotePort: 9987
+    sendData:
+    - fieldName: 3D_Displacements
+      type: mat
+    - fieldName: 3D_Positions
+      type: mat
+    - fieldName: 3D_Forces
+      type: mat
+    - fieldName: 3D_ResultantForce
+      type: mat
+    - fieldName: 3D_ResultantMoment
+      type: mat
+    - fieldName: InitializeProgress
+      type: f64
+- name: CustomCall
+  threads: 1
+  config:
+    nothing: nothing
+- name: ImageDisplayer
+  threads: 1
+  config:
+    displayFields:
+    - fieldName: DMP_Display
+      fixedSize: 0
+    - fieldName: xhatImg
+      fixedSize: 0
+    - fieldName: binaryImg
+      fixedSize: 0
