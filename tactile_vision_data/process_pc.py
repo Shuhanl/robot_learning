@@ -77,11 +77,30 @@ class ProcessPointCloud(object):
         """ Visualizes the given point cloud using Open3D """
         o3d.visualization.draw_geometries([point_cloud])
 
+    def save_pc(self, point_cloud, filename):
+        """ Saves the processed point cloud as a .npz file in the format {'coords': ..., 'features': ...} """
+        # Extract the points (coordinates) and colors (features)
+        points = np.asarray(point_cloud.points)
+        colors = np.asarray(point_cloud.colors)
+        
+        # Create a dictionary with 'coords' and 'features'
+        visual_data = {
+            'points': points,
+            'colors': colors,
+        }
+        
+        # Save to npz file
+        np.savez(filename, **visual_data)
+        print(f"Point cloud saved to {filename}.npz")
+
 if __name__ == "__main__":
 
     process_point_cloud = ProcessPointCloud()
     data = np.load("xyzrgb.npz")
     combined_pcd = process_point_cloud.process(data)
     process_point_cloud.vis_pc(combined_pcd)
+
+    # Save the processed point cloud as an .npz file
+    process_point_cloud.save_pc(combined_pcd, "processed_point_cloud")
 
 

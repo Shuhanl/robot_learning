@@ -6,5 +6,6 @@ pybullet
 matplotlib
 scipy
 open3d
+gpytorch==1.11
 
 
