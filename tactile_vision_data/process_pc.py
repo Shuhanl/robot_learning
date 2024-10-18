@@ -1,7 +1,7 @@
 import numpy as np
 import open3d as o3d
 import copy
-class ProcessPointCloud(object):
+class ProcessVisionPointCloud(object):
     def __init__(self):
         print("init")
 
@@ -95,12 +95,12 @@ class ProcessPointCloud(object):
 
 if __name__ == "__main__":
 
-    process_point_cloud = ProcessPointCloud()
-    data = np.load("xyzrgb.npz")
+    process_point_cloud = ProcessVisionPointCloud()
+    data = np.load("vision.npz")
     combined_pcd = process_point_cloud.process(data)
     process_point_cloud.vis_pc(combined_pcd)
 
     # Save the processed point cloud as an .npz file
-    process_point_cloud.save_pc(combined_pcd, "processed_point_cloud")
+    process_point_cloud.save_pc(combined_pcd, "processed_vision")
 
 
