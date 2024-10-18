@@ -1,6 +1,7 @@
 import numpy as np
 import open3d as o3d
 import copy
+import matplotlib.pyplot as plt
 class ProcessVisionPointCloud(object):
     def __init__(self):
         print("init")
@@ -93,14 +94,96 @@ class ProcessVisionPointCloud(object):
         np.savez(filename, **visual_data)
         print(f"Point cloud saved to {filename}.npz")
 
+class ProcessTactilePointCloud:
+    def __init__(self):
+        """
+        Initialize the visualizer by loading the point cloud data from a .npz file.
+        """
+        self.point_cloud = None
+        self.coords = None
+        self.friction = None
+        self.stiffness = None
+
+    def load_data(self, filename):
+        """
+        Load the point cloud data from the .npz file into memory.
+        """
+        try:
+            data = np.load(filename)
+            self.coords = data['coords']     # 3D coordinates of the points (x, y, z)
+            print(self.coords[0])
+            print()
+            print(self.coords[400])
+            self.friction = data['friction'] # Friction values for each point
+            self.stiffness = data['stiffness'] # Stiffness values for each point
+            print(f"Loaded point cloud data from {filename}")
+
+        except Exception as e:
+            print(f"Failed to load data: {e}")
+
+    def visualize_point_cloud(self, color_by='friction'):
+        """
+        Visualize the tactile point cloud in 3D using Open3D.
+        
+        :param color_by: Choose which attribute to color by ('friction' or 'stiffness').
+        """
+        if self.coords is None or self.friction is None or self.stiffness is None:
+            print("No point cloud data available for visualization.")
+            return
+        
+        # Create an Open3D PointCloud object
+        pcd = o3d.geometry.PointCloud()
+
+        # Assign the coordinates (Nx3)
+        pcd.points = o3d.utility.Vector3dVector(self.coords)
+
+        # Color points by either friction or stiffness
+        if color_by == 'friction':
+            color = self.normalize_to_rgb(self.friction.flatten())  # Normalize friction to RGB colors
+        elif color_by == 'stiffness':
+            color = self.normalize_to_rgb(self.stiffness.flatten())  # Normalize stiffness to RGB colors
+        else:
+            color = np.zeros((self.coords.shape[0], 3))  # Default color (black)
+
+        # Set point cloud colors
+        pcd.colors = o3d.utility.Vector3dVector(color)
+
+        # Visualize the point cloud
+        o3d.visualization.draw_geometries([pcd], window_name=f"Tactile Point Cloud colored by {color_by}")
+
+    def normalize_to_rgb(self, values):
+        """
+        Normalize a scalar array to RGB values for coloring.
+        
+        :param values: Scalar array (e.g., friction or stiffness values)
+        :return: Nx3 array of RGB values.
+        """
+        # Normalize the values to be between 0 and 1
+        normalized_values = (values - values.min()) / (values.max() - values.min() + 1e-8)
+
+        # Create an RGB colormap (you can customize this to any colormap you prefer)
+        cmap = plt.get_cmap('viridis')
+        rgb_colors = cmap(normalized_values)[:, :3]  # Extract RGB from RGBA
+        
+        return rgb_colors
+    
+
 if __name__ == "__main__":
 
-    process_point_cloud = ProcessVisionPointCloud()
-    data = np.load("vision.npz")
-    combined_pcd = process_point_cloud.process(data)
-    process_point_cloud.vis_pc(combined_pcd)
+    # process_vision_pc = ProcessVisionPointCloud()
+    # data = np.load("vision.npz")
+    # combined_pcd = process_vision_pc.process(data)
+    # process_vision_pc.vis_pc(combined_pcd)
 
-    # Save the processed point cloud as an .npz file
-    process_point_cloud.save_pc(combined_pcd, "processed_vision")
+    # # Save the processed point cloud as an .npz file
+    # process_vision_pc.save_pc(combined_pcd, "processed_vision")
 
 
+    process_tactile_pc = ProcessTactilePointCloud()
+    process_tactile_pc.load_data(filename="tactile.npz")
+
+    # Visualize the tactile point cloud, coloring by friction
+    process_tactile_pc.visualize_point_cloud(color_by='friction')
+
+    # Visualize the tactile point cloud, coloring by stiffness
+    process_tactile_pc.visualize_point_cloud(color_by='stiffness')

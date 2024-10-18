@@ -5,7 +5,7 @@ from scipy.spatial.transform import Rotation as Rot
 import matplotlib.pyplot as plt
 import time
 
-class SLAM(object):
+class VisionSLAM(object):
     def __init__(self):
         self.point_clouds = []
 
@@ -128,15 +128,15 @@ if __name__ == "__main__":
     camIntrinsics = cam.getIntrinsics()
     camera_pose = np.load('config/camera_calib.npy')
     flexiv_robot = FlexivRobot()
-    slam = SLAM()
+    vision_slam = VisionSLAM()
 
     flexiv_robot.move_to_home()
     flexiv_robot.set_zero_ft()
     home_pose = flexiv_robot.get_tcp_pose(euler=False)
     object_position = home_pose[:3]
 
-    trajectory_poses = slam.generate_3d_scan_trajectory(object_position)
-    slam.plot_3d_trajectory(trajectory_poses, object_position)
+    trajectory_poses = vision_slam.generate_3d_scan_trajectory(object_position)
+    vision_slam.plot_3d_trajectory(trajectory_poses, object_position)
 
     for pose in trajectory_poses[:3]:
         flexiv_robot.cartesian_motion_force_control(pose)
@@ -144,8 +144,8 @@ if __name__ == "__main__":
         time.sleep(1)
         color, depth = cam.get_data(hole_filling=False)
         xyzrgb = cam.getXYZRGB(color, depth, camIntrinsics, robot_pose, camera_pose, max_depth=0.5, inpaint=True)
-        slam.add_point_cloud(xyzrgb)
+        vision_slam.add_point_cloud(xyzrgb)
 
 
-    np.savez('xyzrgb.npz', *slam.point_clouds)
+    np.savez('xyzrgb.npz', *vision_slam.point_clouds)
 

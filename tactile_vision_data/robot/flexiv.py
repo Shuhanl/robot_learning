@@ -101,7 +101,7 @@ class FlexivRobot:
             q_diff = np.max(np.abs(np.array(target_pose) - np.array(actual_pose)))
 
             
-    def cartesian_motion_force_control(self, target_pose, vel = 0.05, angleVel=10):
+    def cartesian_motion_force_control(self, target_pose, vel = 0.1, angleVel=15):
         """
         Perform Cartesian motion force control.
 
