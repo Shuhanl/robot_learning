@@ -127,6 +127,18 @@ class FlexivRobot:
         while self.parse_pt_states(self.robot.primitive_states(), "reachedTarget") != "1":
             time.sleep(1)
 
+    def search_contact(self, contact_dir = [0, 0, -1], max_contact_force = 10):
+
+        self.robot.SwitchMode(self.mode.NRT_PRIMITIVE_EXECUTION)
+        self.robot.ExecutePrimitive("Contact(contactDir=" + self.list2str(contact_dir) + ","
+                                    + "maxContactForce=" + str(max_contact_force) + ","
+                                    + "enableFineContact=" + str(1) + ")")
+
+        # Wait for reached target
+        while self.parse_pt_states(self.robot.primitive_states(), "curContactForce") != "":
+            time.sleep(1)
+            
+
     def gripper_control(self, gripper_width, gripper_velocity, gripper_force):
         self.gripper.Move(gripper_width, gripper_velocity, gripper_force)
 
@@ -314,33 +326,35 @@ if __name__ == "__main__":
 
     flexiv_robot.move_to_home()
     flexiv_robot.set_zero_ft()
-    ext_wrench = flexiv_robot.get_ext_wrench()
-    print("External wrench:", ext_wrench)
-    tcp_pose = flexiv_robot.get_tcp_pose(euler=True, degree=True)
-    print("TCP pose:", tcp_pose)
-    flexiv_robot.init_gripper()
-    gripper_states = flexiv_robot.get_gripper_states()
-    print("Gripper states:", gripper_states)
-
-    cartesian_list = [[0.65, -0.3, 0.2, 180, 0, 180],
-                      [0.65, 0, 0.2, 180, 0, 180],
-                      [0.65, -0.3, 0.3, 180, 0, 180]]
+    flexiv_robot.search_contact()
     
-    for cartesian in cartesian_list:
-        flexiv_robot.cartesian_motion_force_control(cartesian)
-        time.sleep(1)
+    # ext_wrench = flexiv_robot.get_ext_wrench()
+    # print("External wrench:", ext_wrench)
+    # tcp_pose = flexiv_robot.get_tcp_pose(euler=True, degree=True)
+    # print("TCP pose:", tcp_pose)
+    # flexiv_robot.init_gripper()
+    # gripper_states = flexiv_robot.get_gripper_states()
+    # print("Gripper states:", gripper_states)
 
-    joints_list = [[-0.57789973, -0.70800994,  0.53129942,  1.58402704,  0.31958843, 1.0613998 , -0.79267218], 
-                   [-0.67789973, -0.80800994,  0.53129942,  1.58402704,  0.31958843, 1.0613998 , -0.79267218]]
+    # cartesian_list = [[0.65, -0.3, 0.2, 180, 0, 180],
+    #                   [0.65, 0, 0.2, 180, 0, 180],
+    #                   [0.65, -0.3, 0.3, 180, 0, 180]]
     
-    target_vel = [0.0]*7  
-    target_acc = [0.0]*7 
-    max_vel=[0.2] * 7
-    max_acc=[0.3] * 7
+    # for cartesian in cartesian_list:
+    #     flexiv_robot.cartesian_motion_force_control(cartesian)
+    #     time.sleep(1)
 
-    for joints in joints_list:
-        flexiv_robot.joint_control(joints, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
-        time.sleep(1)
+    # joints_list = [[-0.57789973, -0.70800994,  0.53129942,  1.58402704,  0.31958843, 1.0613998 , -0.79267218], 
+    #                [-0.67789973, -0.80800994,  0.53129942,  1.58402704,  0.31958843, 1.0613998 , -0.79267218]]
+    
+    # target_vel = [0.0]*7  
+    # target_acc = [0.0]*7 
+    # max_vel=[0.2] * 7
+    # max_acc=[0.3] * 7
+
+    # for joints in joints_list:
+    #     flexiv_robot.joint_control(joints, target_vel, target_acc, max_vel=max_vel, max_acc=max_acc)
+    #     time.sleep(1)
     
     # gripper_list = [[0.01, 0.1, 20], [0.09, 0.1, 20], [0.01, 0.1, 20]]
     # for gripper in gripper_list:
