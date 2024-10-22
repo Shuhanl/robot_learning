@@ -153,15 +153,15 @@ class GPModel:
         self.tactile_stiffness = tactile_data['stiffness']
 
         self.visual_coords = visual_data['coords']
-        self.visual_features = visual_data['visual_coords']
+        self.visual_features = visual_data['colors']
 
         self.data_processor = DataProcessor()
 
     def train_tactile_gp(self, num_steps=100):
         # Prepare training data
         train_x = np.hstack((self.tactile_coords, self.tactile_visual_features))
-        train_y_friction = self.tactile_measurements[:, 0]
-        train_y_stiffness = self.tactile_measurements[:, 1]
+        train_y_friction = self.tactile_friction
+        train_y_stiffness = self.tactile_stiffness
 
         # Normalize data
         self.train_x, _ = self.data_processor.normalize_data(train_x, train_x)
@@ -245,7 +245,7 @@ if __name__ == "__main__":
 
     visual_data = {
         'coords': visual_coords,
-        'visual_colors': visual_colors,
+        'colors': visual_colors,
     }
 
     # Initialize GP model
