@@ -85,8 +85,8 @@ class TactileSlam(object):
 
         if self.tac3d.getFrame() is not None:
 
-            P = self.tac3d.getFrame()['3D_Positions']
-            D = self.tac3d.getFrame()['3D_Displacements']
+            P = self.tac3d.getFrame()['3D_Positions'] / 1000 # Convert it to m
+            D = self.tac3d.getFrame()['3D_Displacements'] / 1000 # Convert it to m
             F = self.tac3d.getFrame()['3D_Forces']
 
             friction = np.zeros((400, 1))  # 400x1 array for friction

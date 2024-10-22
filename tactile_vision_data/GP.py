@@ -3,6 +3,7 @@ import gpytorch
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
+from scipy.spatial import cKDTree
 
 # Custom Kernel Combining Spatial and Visual Features
 class CombinedKernel(gpytorch.kernels.Kernel):
@@ -107,7 +108,35 @@ class DataProcessor:
             visual_colors = visual_colors / 255.0
 
         return visual_coords, visual_colors
+    
+    def load_tactile_data(self, filename):
+        """
+        Load the point cloud data from the .npz file into memory.
+        """
+        try:
+            data = np.load(filename)
+            coords = data['coords']     # 3D coordinates of the points (x, y, z)
+            friction = data['friction'] # Friction values for each point
+            stiffness = data['stiffness'] # Stiffness values for each point
+            print(f"Loaded point cloud data from {filename}")
 
+        except Exception as e:
+            print(f"Failed to load data: {e}")
+        
+        return coords, friction, stiffness
+
+    def get_visual_features_for_tactile_points(self, tactile_coords, visual_coords, visual_features):
+        # Build KD-Tree from visual coordinates
+        visual_tree = cKDTree(visual_coords)
+
+        # Query nearest visual points for each tactile point
+        distances, indices = visual_tree.query(tactile_coords, k=1)
+
+        # Extract visual features for tactile points
+        tactile_visual_features = visual_features[indices]
+
+        return tactile_visual_features
+    
     def normalize_data(self, train_x, test_x):
         self.scaler.fit(train_x)
         train_x_norm = self.scaler.transform(train_x)
@@ -120,9 +149,11 @@ class GPModel:
         self.device = device
         self.tactile_coords = tactile_data['coords']
         self.tactile_visual_features = tactile_data['visual_features']
-        self.tactile_measurements = tactile_data['measurements']
+        self.tactile_friction = tactile_data['friction']
+        self.tactile_stiffness = tactile_data['stiffness']
+
         self.visual_coords = visual_data['coords']
-        self.visual_features = visual_data['features']
+        self.visual_features = visual_data['visual_coords']
 
         self.data_processor = DataProcessor()
 
@@ -196,29 +227,25 @@ if __name__ == "__main__":
     data_processor = DataProcessor()
 
     # Load visual data from .npz file
-    visual_coords, visual_colors = data_processor.load_visual_data("processed_point_cloud.npz")
+    visual_coords, visual_colors = data_processor.load_visual_data("processed_vision.npz")
+    tactile_coords, friction, stiffness = data_processor.load_tactile_data("tactile.npz")
 
-    # For demonstration, create synthetic tactile data
-    N_tactile = 50
-    tactile_indices = np.random.choice(len(visual_coords), N_tactile, replace=False)
-    tactile_coords = visual_coords[tactile_indices]
-    tactile_visual_features = visual_colors[tactile_indices]
-
-    # Generate tactile measurements (friction and stiffness) correlated with visual features
-    tactile_friction = tactile_visual_features[:, 0] + tactile_coords[:, 0] + np.random.normal(0, 0.1, N_tactile)
-    tactile_stiffness = tactile_visual_features[:, 1] + tactile_coords[:, 1] + np.random.normal(0, 0.1, N_tactile)
-    tactile_measurements = np.stack((tactile_friction, tactile_stiffness), axis=1)
+    # Get visual features for tactile points
+    tactile_visual_features = data_processor.get_visual_features_for_tactile_points(
+        tactile_coords, visual_coords, visual_colors
+    )
 
     # Prepare tactile and visual data dictionaries
     tactile_data = {
         'coords': tactile_coords,
         'visual_features': tactile_visual_features,
-        'measurements': tactile_measurements,
+        'friction': friction,
+        'stiffness': stiffness,
     }
 
     visual_data = {
         'coords': visual_coords,
-        'features': visual_colors,
+        'visual_colors': visual_colors,
     }
 
     # Initialize GP model
