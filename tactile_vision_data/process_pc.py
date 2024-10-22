@@ -171,16 +171,9 @@ if __name__ == "__main__":
     data = np.load("vision.npz")
     combined_pcd = process_vision_pc.process(data)
     process_vision_pc.vis_pc(combined_pcd)
-
-    # Save the processed point cloud as an .npz file
     process_vision_pc.save_pc(combined_pcd, "processed_vision")
 
-
-    # process_tactile_pc = ProcessTactilePointCloud()
-    # process_tactile_pc.load_data(filename="tactile.npz")
-
-    # # Visualize the tactile point cloud, coloring by friction
-    # process_tactile_pc.visualize_point_cloud(color_by='friction')
-
-    # # Visualize the tactile point cloud, coloring by stiffness
-    # process_tactile_pc.visualize_point_cloud(color_by='stiffness')
+    process_tactile_pc = ProcessTactilePointCloud()
+    process_tactile_pc.load_data(filename="tactile.npz")
+    process_tactile_pc.visualize_point_cloud(color_by='friction')
+    process_tactile_pc.visualize_point_cloud(color_by='stiffness')
