@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
+from tqdm import tqdm
 
 # Custom Kernel Combining Spatial and Visual Features
 class CombinedKernel(gpytorch.kernels.Kernel):
@@ -64,14 +65,14 @@ class GPRegression:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.1)
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
 
-        for i in range(self.num_steps):
+        for epoch in range(self.num_steps):
             optimizer.zero_grad()
             output = self.model(self.train_x)
             loss = -mll(output, self.train_y)
             loss.backward()
             optimizer.step()
-            if i % 10 == 0 or i == self.num_steps - 1:
-                print(f"Iter {i + 1}/{self.num_steps} - Loss: {loss.item():.3f}")
+            if epoch % 10 == 0 or epoch == self.num_steps - 1:
+                print(f"Epoch {epoch + 1}/{self.num_steps} - Loss: {loss.item():.3f}")
 
     def predict(self, test_x):
         self.model.eval()
@@ -145,7 +146,7 @@ class DataProcessor:
 
 # Main GP Class
 class GPModel:
-    def __init__(self, tactile_data, visual_data, device='cpu'):
+    def __init__(self, tactile_data, visual_data, batch_size=1024, num_steps=100, device='cpu'):
         self.device = device
         self.tactile_coords = tactile_data['coords']
         self.tactile_visual_features = tactile_data['visual_features']
@@ -156,8 +157,10 @@ class GPModel:
         self.visual_features = visual_data['colors']
 
         self.data_processor = DataProcessor()
+        self.batch_size = batch_size
+        self.num_steps= num_steps
 
-    def train_tactile_gp(self, num_steps=100):
+    def train_tactile_gp(self):
         # Prepare training data
         train_x = np.hstack((self.tactile_coords, self.tactile_visual_features))
         train_y_friction = self.tactile_friction
@@ -167,11 +170,19 @@ class GPModel:
         self.train_x, _ = self.data_processor.normalize_data(train_x, train_x)
 
         # Train GP model for friction
-        self.tactile_gp_friction = GPRegression(self.train_x, train_y_friction, num_steps=num_steps, device=self.device)
+        self.tactile_gp_friction = GPRegression(
+            self.train_x, train_y_friction,
+            num_steps=self.num_steps,
+            device=self.device
+        )
         self.tactile_gp_friction.train()
 
         # Train GP model for stiffness
-        self.tactile_gp_stiffness = GPRegression(self.train_x, train_y_stiffness, num_steps=num_steps, device=self.device)
+        self.tactile_gp_stiffness = GPRegression(
+            self.train_x, train_y_stiffness,
+            num_steps=self.num_steps,
+            device=self.device
+        )
         self.tactile_gp_stiffness.train()
 
     def infer_tactile_properties(self):
@@ -179,14 +190,27 @@ class GPModel:
         test_x = np.hstack((self.visual_coords, self.visual_features))
         _, self.test_x = self.data_processor.normalize_data(self.train_x, test_x)
 
-        # Predict friction at visual points
-        mean_friction, _ = self.tactile_gp_friction.predict(self.test_x)
-        # Predict stiffness at visual points
-        mean_stiffness, _ = self.tactile_gp_stiffness.predict(self.test_x)
+        num_points = self.test_x.shape[0]
+        mean_friction_list = []
+        mean_stiffness_list = []
+        total_batches = (num_points + self.batch_size - 1) // self.batch_size
 
-        # Store predicted tactile properties
-        self.predicted_friction = mean_friction
-        self.predicted_stiffness = mean_stiffness
+        # Process in batches
+        for start_idx in tqdm(range(0, num_points, self.batch_size), total=total_batches, desc='Inference Batches'):
+            end_idx = min(start_idx + self.batch_size, num_points)
+            batch_x = self.test_x[start_idx:end_idx]
+
+            # Predict friction
+            mean_friction_batch, _ = self.tactile_gp_friction.predict(batch_x)
+            mean_friction_list.append(mean_friction_batch)
+
+            # Predict stiffness
+            mean_stiffness_batch, _ = self.tactile_gp_stiffness.predict(batch_x)
+            mean_stiffness_list.append(mean_stiffness_batch)
+
+        # Concatenate all batches
+        self.predicted_friction = np.concatenate(mean_friction_list)
+        self.predicted_stiffness = np.concatenate(mean_stiffness_list)
 
     def visualize_tactile_properties(self):
         # Visualize tactile properties on the point cloud
@@ -249,10 +273,10 @@ if __name__ == "__main__":
     }
 
     # Initialize GP model
-    gp_model = GPModel(tactile_data, visual_data, device='cpu')
+    gp_model = GPModel(tactile_data, visual_data, device='cuda')
 
     # Train tactile GP models
-    gp_model.train_tactile_gp(num_steps=100)
+    gp_model.train_tactile_gp()
 
     # Infer tactile properties at visual points
     gp_model.infer_tactile_properties()
