@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
     robot_poses = []
     for pose in calib_poses:
-        flexiv_robot.cartesian_motion_force_control(pose)
+        flexiv_robot.cartesian_motion_control(pose)
         robot_poses.append(flexiv_robot.get_tcp_pose(matrix = True))
         time.sleep(1)
         color, depth = cam.get_data()

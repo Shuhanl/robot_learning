@@ -171,7 +171,7 @@ if __name__ == "__main__":
     vision_slam.plot_trajectory(trajectory, object_position=object_position, show_orientation=True, scale=0.02)
 
     for pose in trajectory[:3]:
-        flexiv_robot.cartesian_motion_force_control(pose)
+        flexiv_robot.cartesian_motion_control(pose)
         robot_pose = flexiv_robot.get_tcp_pose(matrix = True)
         time.sleep(1)
         color, depth = cam.get_data(hole_filling=False)
@@ -179,5 +179,5 @@ if __name__ == "__main__":
         vision_slam.add_point_cloud(xyzrgb)
 
 
-    np.savez('xyzrgb.npz', *vision_slam.point_clouds)
+    np.savez('vision.npz', *vision_slam.point_clouds)
 

@@ -34,7 +34,7 @@ class TactileSlam(object):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             print("Tac3D sensor process started...")
-            time.sleep(5)  # Give time for the sensor to initialize
+            time.sleep(3)  # Give time for the sensor to initialize
         except Exception as e:
             print(f"Failed to start Tac3D sensor process: {e}")
             exit(1)
@@ -46,10 +46,10 @@ class TactileSlam(object):
         Calibrate the Tac3D sensor.
         """
         self.tac3d.waitForFrame()
-        time.sleep(5)  # Wait for sensor to connect
+        time.sleep(3)  # Wait for sensor to connect
         SN = self.tac3d.getFrame()['SN']
         self.tac3d.calibrate(SN)
-        time.sleep(5)  # Wait for calibration
+        time.sleep(3)  # Wait for calibration
 
     def compute_world_coordinates(self, tactile_positions, ee_pose):
         """
@@ -83,34 +83,36 @@ class TactileSlam(object):
         :param num_poses: Number of poses to collect data for.
         """
 
-        P = self.tac3d.getFrame()['3D_Positions']
-        D = self.tac3d.getFrame()['3D_Displacements']
-        F = self.tac3d.getFrame()['3D_Forces']
+        if self.tac3d.getFrame() is not None:
 
-        friction = np.zeros((400, 1))  # 400x1 array for friction
-        stiffness = np.zeros((400, 1))  # 400x1 array for stiffness
+            P = self.tac3d.getFrame()['3D_Positions']
+            D = self.tac3d.getFrame()['3D_Displacements']
+            F = self.tac3d.getFrame()['3D_Forces']
 
-        for idx in range(400):
-            Fx, Fy, Fz = F[idx]      # Forces in x, y, z directions
-            _, _, z_disp = D[idx]    # Displacement in z direction
+            friction = np.zeros((400, 1))  # 400x1 array for friction
+            stiffness = np.zeros((400, 1))  # 400x1 array for stiffness
 
-            if Fz != 0:
-                friction[idx] = np.sqrt(Fx**2 + Fy**2) / Fz
-                stiffness[idx] = Fz / z_disp if z_disp != 0 else 0
-            else:
-                friction[idx] = 0
-                stiffness[idx] = 0
+            for idx in range(400):
+                Fx, Fy, Fz = F[idx]      # Forces in x, y, z directions
+                _, _, z_disp = D[idx]    # Displacement in z direction
 
-        # Compute the point cloud for this frame using the combined transformation
-        coord = self.compute_world_coordinates(P, robot_pose)
+                if Fz != 0:
+                    friction[idx] = np.sqrt(Fx**2 + Fy**2) / Fz
+                    stiffness[idx] = Fz / z_disp if z_disp != 0 else 0
+                else:
+                    friction[idx] = 0
+                    stiffness[idx] = 0
 
-        # Append friction, stiffness, and coordinates for the current frame
-        self.coord_data.append(coord)
-        self.friction_data.append(friction)
-        self.stiffness_data.append(stiffness)
+            # Compute the point cloud for this frame using the combined transformation
+            coord = self.compute_world_coordinates(P, robot_pose)
 
-    def generate_3d_scan_trajectory(self, object_position, num_points_per_segment=10, num_zigzags=5,
-                                    amplitude=0.05, total_length=0.3, height_offset=0.05):
+            # Append friction, stiffness, and coordinates for the current frame
+            self.coord_data.append(coord)
+            self.friction_data.append(friction)
+            self.stiffness_data.append(stiffness)
+
+    def generate_3d_scan_trajectory(self, object_position, num_points_per_segment=3, num_zigzags=2,
+                                    amplitude=0.05, total_length=0.3):
         '''
         Generates a zig-zag trajectory along the xy plane with the end-effector pointing downward.
 
@@ -131,7 +133,7 @@ class TactileSlam(object):
             fraction = i / (num_points_per_segment - 1)
             x = object_position[0] + fraction * total_length - total_length / 2  # Moving along x-axis
             y = object_position[1] + amplitude * np.sin(fraction * num_zigzags * np.pi)  # Zig-zag motion in y
-            z = object_position[2] + height_offset  # Constant z position
+            z = object_position[2] 
 
             roll = object_position[3]    
             pitch = object_position[4]
@@ -234,24 +236,25 @@ if __name__ == "__main__":
 
     flexiv_robot.move_to_home()
     flexiv_robot.set_zero_ft()
+    flexiv_robot.search_contact()
     home_pose = flexiv_robot.get_tcp_pose(euler=True, degree=True)
     object_position = home_pose
 
     # Generate the trajectory
     trajectory = tactile_slam.generate_3d_scan_trajectory(
         object_position=object_position,
-        num_points_per_segment=50,
-        num_zigzags=5,
+        num_points_per_segment=10,
+        num_zigzags=2,
         amplitude=0.05,
-        total_length=0.3,
-        height_offset=0.1
-    )
+        total_length=0.1)
 
     # Plot the trajectory
     tactile_slam.plot_trajectory(trajectory, object_position=object_position, show_orientation=True, scale=0.02)
-
+    target_wrench = [0, 0, -5, 0, 0, 0]
+    vel = 0.05
+    
     for pose in trajectory:
-        flexiv_robot.cartesian_motion_force_control(pose)
+        flexiv_robot.hybrid_force_control(pose, target_wrench, vel)
         robot_pose = flexiv_robot.get_tcp_pose(matrix = True)
         time.sleep(1)
         tactile_slam.collect_tactile_data(robot_pose)

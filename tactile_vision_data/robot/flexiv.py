@@ -101,7 +101,7 @@ class FlexivRobot:
             q_diff = np.max(np.abs(np.array(target_pose) - np.array(actual_pose)))
 
             
-    def cartesian_motion_force_control(self, target_pose, vel = 0.1, angleVel=15):
+    def cartesian_motion_control(self, target_pose, vel = 0.1, angleVel=15):
         """
         Perform Cartesian motion force control.
 
@@ -138,6 +138,18 @@ class FlexivRobot:
         while self.parse_pt_states(self.robot.primitive_states(), "curContactForce") != "":
             time.sleep(1)
             
+
+    def hybrid_force_control(self, target, target_wrench, vel, force_axis=[0, 0, 1, 0, 0, 0]):
+        
+        self.robot.SwitchMode(self.mode.NRT_PRIMITIVE_EXECUTION)
+        self.robot.ExecutePrimitive("ForceHybrid(target=" + self.list2str(target) + "WORLD WORLD_ORIGN,"
+                                    + "forceAxis=" + self.list2str(force_axis) + "," 
+                                    + "targetWrench=" + self.list2str(target_wrench) + ","
+                                    + "vel=" + str(vel) + ")")
+    
+        # Wait for reached target
+        while self.parse_pt_states(self.robot.primitive_states(), "reachedTarget") != "1":
+            time.sleep(1)
 
     def gripper_control(self, gripper_width, gripper_velocity, gripper_force):
         self.gripper.Move(gripper_width, gripper_velocity, gripper_force)
@@ -326,7 +338,6 @@ if __name__ == "__main__":
 
     flexiv_robot.move_to_home()
     flexiv_robot.set_zero_ft()
-    flexiv_robot.search_contact()
     
     # ext_wrench = flexiv_robot.get_ext_wrench()
     # print("External wrench:", ext_wrench)
@@ -360,4 +371,10 @@ if __name__ == "__main__":
     # for gripper in gripper_list:
     #     flexiv_robot.gripper_control(gripper[0], gripper[1], gripper[2])
     #     time.sleep(1)
+
+    flexiv_robot.search_contact()
+    target_pose = flexiv_robot.get_tcp_pose(euler=True, degree=True)
+    target_pose[0] -= 0.1
+    target_wrench = [0, 0, -5, 0, 0, 0]
+    flexiv_robot.hybrid_force_control(target_pose, target_wrench, vel = 0.1)
 
