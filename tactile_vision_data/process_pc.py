@@ -74,11 +74,11 @@ class ProcessVisionPointCloud(object):
 
         return combined_pcd
 
-    def vis_pc(self, point_cloud):
+    def visualize_point_cloud(self, point_cloud):
         """ Visualizes the given point cloud using Open3D """
         o3d.visualization.draw_geometries([point_cloud])
-
-    def save_pc(self, point_cloud, filename):
+    
+    def save_point_cloud(self, point_cloud, filename):
         """ Saves the processed point cloud as a .npz file in the format {'coords': ..., 'features': ...} """
         # Extract the points (coordinates) and colors (features)
         points = np.asarray(point_cloud.points)
@@ -118,6 +118,22 @@ class ProcessTactilePointCloud:
         except Exception as e:
             print(f"Failed to load data: {e}")
 
+    def normalize_to_rgb(self, values):
+        """
+        Normalize a scalar array to RGB values for coloring.
+        
+        :param values: Scalar array (e.g., friction or stiffness values)
+        :return: Nx3 array of RGB values.
+        """
+        # Normalize the values to be between 0 and 1
+        normalized_values = (values - values.min()) / (values.max() - values.min() + 1e-8)
+
+        # Create an RGB colormap (you can customize this to any colormap you prefer)
+        cmap = plt.get_cmap('viridis')
+        rgb_colors = cmap(normalized_values)[:, :3]  # Extract RGB from RGBA
+        
+        return rgb_colors
+
     def visualize_point_cloud(self, color_by='friction'):
         """
         Visualize the tactile point cloud in 3D using Open3D.
@@ -148,32 +164,44 @@ class ProcessTactilePointCloud:
         # Visualize the point cloud
         o3d.visualization.draw_geometries([pcd], window_name=f"Tactile Point Cloud colored by {color_by}")
 
-    def normalize_to_rgb(self, values):
+    def get_tactile_pcd(self, radius=0.0005):
         """
-        Normalize a scalar array to RGB values for coloring.
-        
-        :param values: Scalar array (e.g., friction or stiffness values)
-        :return: Nx3 array of RGB values.
+        Create an Open3D PointCloud object for the tactile data.
+        The tactile points are colored red.
         """
-        # Normalize the values to be between 0 and 1
-        normalized_values = (values - values.min()) / (values.max() - values.min() + 1e-8)
+        if self.coords is None:
+            print("No point cloud data available.")
+            return None
 
-        # Create an RGB colormap (you can customize this to any colormap you prefer)
-        cmap = plt.get_cmap('viridis')
-        rgb_colors = cmap(normalized_values)[:, :3]  # Extract RGB from RGBA
-        
-        return rgb_colors
+        color = np.array([1.0, 0.0, 0.0])
+        spheres = []
+        sphere_mesh = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
+        sphere_mesh.compute_vertex_normals()
+        sphere_mesh.paint_uniform_color(color)
+
+        for point in self.coords:
+            sphere = copy.deepcopy(sphere_mesh)
+            sphere.translate(point)
+            spheres.append(sphere)
+
+        return spheres
     
+
 
 if __name__ == "__main__":
 
     process_vision_pc = ProcessVisionPointCloud()
     data = np.load("vision.npz")
-    combined_pcd = process_vision_pc.process(data)
-    process_vision_pc.vis_pc(combined_pcd)
-    process_vision_pc.save_pc(combined_pcd, "processed_vision")
+    processed_pcd = process_vision_pc.process(data)
+    process_vision_pc.visualize_point_cloud(processed_pcd)
+    process_vision_pc.save_point_cloud(processed_pcd, "processed_vision_pcd")
 
     process_tactile_pc = ProcessTactilePointCloud()
     process_tactile_pc.load_data(filename="tactile.npz")
     process_tactile_pc.visualize_point_cloud(color_by='friction')
     process_tactile_pc.visualize_point_cloud(color_by='stiffness')
+
+    # Get tactile point cloud colored by friction
+    tactile_pcd = process_tactile_pc.get_tactile_pcd()
+
+    o3d.visualization.draw_geometries([processed_pcd] + tactile_pcd, window_name="Combined Point Cloud with Tactile Points Highlighted")

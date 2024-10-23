@@ -17,7 +17,10 @@ class TactileSlam(object):
         self.tac3d = None
 
         # Transformation matrix from the tactile sensor frame to the robot end-effector frame
-        self.T_sensor_to_ee = np.eye(4)  
+        self.T_sensor_to_ee = np.numpy([[-1, 0, 0, 0],
+                                        [0, 1, 0, 0], 
+                                        [0, 0, 1, 0.037], 
+                                        [0, 0, 0, 1   ]]) 
 
         # Data storage
         self.coord_data = []

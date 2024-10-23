@@ -150,8 +150,6 @@ class SLAM(object):
 
         plt.show()
 
-
-
     def add_point_cloud(self, xyzrgb):
         self.point_clouds.append(xyzrgb)
 
