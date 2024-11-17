@@ -122,7 +122,6 @@ class RealSenseCamera(object):
 
         # Combine robot pose and camera pose to get the full transformation
         full_pose = np.dot(robot_pose, camera_pose)
-        print(full_pose)
 
         # Generate pixel grid
         [pixX, pixY] = np.meshgrid(np.arange(widthIMG), np.arange(heightIMG))
