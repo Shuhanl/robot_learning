@@ -3,15 +3,17 @@ import numpy as np
 import cv2
 import pdb
 import matplotlib.pyplot as plt
+from parameters import CameraParams
 
 class RealSenseCamera(object):
     def __init__(self):
         self.pipeline = rs.pipeline()
         self.config = rs.config()
+        self.camera_params = CameraParams()
 
         # Configure the streams
-        self.config.enable_stream(rs.stream.depth,1280,720,rs.format.z16,30)
-        self.config.enable_stream(rs.stream.color,1280,720,rs.format.bgr8,30)
+        self.config.enable_stream(rs.stream.depth, self.camera_params.image_width, self.camera_params.image_height, rs.format.z16,30)
+        self.config.enable_stream(rs.stream.color, self.camera_params.image_width, self.camera_params.image_height, rs.format.bgr8,30)
         self.hole_filling = rs.hole_filling_filter()
         self.align_to = rs.stream.color
         self.align = rs.align(self.align_to)

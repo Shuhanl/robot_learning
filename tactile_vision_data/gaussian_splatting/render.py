@@ -1,7 +1,6 @@
 import torch
 import math
-import numpy as np
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+# from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from utils.sh_utils import eval_sh
 
 
@@ -15,7 +14,7 @@ class Renderer:
         """
         self.pc = GaussianModel  # Point cloud Gaussian model
 
-    def compute_camera(intrinsics, robot_pose, camera_pose, image_width, image_height, znear=0.1, zfar=1000.0):
+    def compute_camera(intrinsics, extrinsics, image_width, image_height, znear=0.1, zfar=1000.0):
 
         # Compute field of view
         fx = intrinsics[0, 0]
@@ -24,9 +23,6 @@ class Renderer:
         cy = intrinsics[1, 2]
         FoVx = 2 * torch.atan(image_width / (2 * fx))
         FoVy = 2 * torch.atan(image_height / (2 * fy))
-
-        # Combine robot pose and camera pose to get the extrinsics (world-to-camera transform)
-        world_view_transform = torch.tensor(robot_pose @ camera_pose, dtype=torch.float32, device="cuda")
 
         # Compute projection matrix
         full_proj_transform = torch.zeros((4, 4), dtype=torch.float32, device="cuda")
@@ -38,14 +34,13 @@ class Renderer:
         full_proj_transform[2, 3] = -(2 * zfar * znear) / (zfar - znear)
         full_proj_transform[3, 2] = -1.0
 
-        view_inv = torch.inverse(world_view_transform)
+        view_inv = torch.inverse(extrinsics)
         camera_center = view_inv[3][:3]
 
         # Return MiniCam object
-        return image_width,  image_height, FoVy, FoVx, world_view_transform, full_proj_transform, camera_center
+        return  FoVy, FoVx, extrinsics, full_proj_transform, camera_center
 
-    def render(self,
-               intrinsics, robot_pose, camera_pose, image_width, image_height,
+    def render(self, intrinsics, extrinsics, image_width, image_height,
                pipe,
                bg_color: torch.Tensor,
                scaling_modifier=1.0,
@@ -66,7 +61,7 @@ class Renderer:
         except:
             pass
 
-        image_width,  image_height, FoVy, FoVx, world_view_transform, full_proj_transform, camera_center = self.compute_camera(intrinsics, robot_pose, camera_pose, image_width, image_height)
+        FoVy, FoVx, world_view_transform, full_proj_transform, camera_center = self.compute_camera(intrinsics, extrinsics, image_width, image_height)
 
         # Set up rasterization configuration
         tanfovx = math.tan(FoVx * 0.5)
@@ -82,7 +77,7 @@ class Renderer:
             viewmatrix=world_view_transform,
             projmatrix=full_proj_transform,
             sh_degree=self.pc.active_sh_degree,
-            campos=camera_center
+            campos=camera_center,
             prefiltered=False,
             render_features=render_features,
             render_gaussian_idx=render_gaussian_idx,

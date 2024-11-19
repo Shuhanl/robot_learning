@@ -5,7 +5,7 @@ from scipy.spatial.transform import Rotation as Rot
 import matplotlib.pyplot as plt
 import time
 
-class SLAM(object):
+class VisionSLAM(object):
     def __init__(self):
         self.point_clouds = []
 
@@ -158,7 +158,7 @@ if __name__ == "__main__":
     camIntrinsics = cam.getIntrinsics()
     camera_pose = np.load('config/camera_calib.npy')
     flexiv_robot = FlexivRobot()
-    vision_slam = SLAM()
+    vision_slam = VisionSLAM()
 
     flexiv_robot.move_to_home()
     flexiv_robot.set_zero_ft()
