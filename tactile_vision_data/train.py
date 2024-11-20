@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import os
+import random
 from gaussian_splatting.render import Renderer
 from gaussian_splatting.gaussian_model import GaussianModel
 from utils.loss_utils import l1_loss
@@ -19,6 +20,10 @@ def train_gs(dataset_dir="dataset"):
 
     camera_pose = np.load('config/camera_calib.npy')
 
+    # Get the list of all available data files
+    data_files = [f.split('_')[1].split('.')[0] for f in os.listdir(dataset_dir) if f.startswith("rgb")]
+    data_indices = sorted(list(set(data_files)))  # Ensure unique and sorted indices
+
     white_background = False
 
     for iteration in range(0, opt.iterations):
@@ -30,10 +35,17 @@ def train_gs(dataset_dir="dataset"):
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
 
-        # Load RGB, depth, and pose data for the current iteration
-        rgb = np.load(os.path.join(dataset_dir, f"rgb_{iteration:04d}.npy"))
-        depth = np.load(os.path.join(dataset_dir, f"depth_{iteration:04d}.npy"))
-        robot_pose = np.load(os.path.join(dataset_dir, f"pose_{iteration:04d}.npy"))
+        # Randomly sample an index from the available data
+        sampled_index = random.choice(data_indices)
+
+        # Load the sampled RGB, depth, and pose data
+        rgb_path = os.path.join(dataset_dir, f"rgb_{sampled_index}.npy")
+        depth_path = os.path.join(dataset_dir, f"depth_{sampled_index}.npy")
+        pose_path = os.path.join(dataset_dir, f"pose_{sampled_index}.npy")
+        
+        rgb = np.load(rgb_path)
+        depth = np.load(depth_path)
+        robot_pose = np.load(pose_path)
 
         # Combine robot pose and camera pose to get the extrinsics (world-to-camera transform)
         extrinsics  = torch.tensor(robot_pose @ camera_pose, dtype=torch.float32, device="cuda")
