@@ -5,17 +5,16 @@ import random
 from gaussian_splatting.render import Renderer
 from gaussian_splatting.gaussian_model import GaussianModel
 from utils.loss_utils import l1_loss
-from parameters import OptimizationParams, CameraParams
+from parameters import GSParams, CameraParams
 
 
 def train_gs(dataset_dir="dataset"):
-    sh_degree  = 2
-    distill_feature_dim = 3
-    gaussians = GaussianModel(sh_degree, distill_feature_dim)
 
-    opt = OptimizationParams()
+    gs_params = GSParams()
+    gaussians = GaussianModel(gs_params.sh_degree, gs_params.distill_feature_dim)
+
     camera_params = CameraParams()
-    gaussians.training_setup(opt)
+    gaussians.training_setup(gs_params)
     render = Renderer(gaussians)
 
     camera_pose = np.load('config/camera_calib.npy')
@@ -26,7 +25,7 @@ def train_gs(dataset_dir="dataset"):
 
     white_background = False
 
-    for iteration in range(0, opt.iterations):
+    for iteration in range(0, gs_params.iterations):
 
         gaussians.update_learning_rate(iteration)
         gaussians.update_feature_learning_rate(iteration)
@@ -72,15 +71,15 @@ def train_gs(dataset_dir="dataset"):
 
         with torch.no_grad():
 
-            if iteration < opt.densify_until_iter:
+            if iteration < gs_params.densify_until_iter:
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, camera_params.cameras_extent, size_threshold)
+                if iteration > gs_params.densify_from_iter and iteration % gs_params.densification_interval == 0:
+                    size_threshold = 20 if iteration > gs_params.opacity_reset_interval else None
+                    gaussians.densify_and_prune(gs_params.densify_grad_threshold, 0.005, camera_params.cameras_extent, size_threshold)
                 
-                if iteration % opt.opacity_reset_interval == 0 or (white_background and iteration == opt.densify_from_iter):
+                if iteration % gs_params.opacity_reset_interval == 0 or (white_background and iteration == gs_params.densify_from_iter):
                     gaussians.reset_opacity()
 
             gaussians.optimizer.step()

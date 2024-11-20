@@ -2,8 +2,10 @@ import torch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class OptimizationParams():
+class GSParams():
     def __init__(self):
+        self.sh_degree  = 2
+        self.distill_feature_dim = 3
         self.iterations = 30000
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
