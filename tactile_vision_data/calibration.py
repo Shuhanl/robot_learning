@@ -156,5 +156,9 @@ if __name__ == "__main__":
     mtx, dist, rvecs, tvecs = calib.perform_camera_calibration()
     mtx = cam.getIntrinsics()
     camT = calib.perform_hand_eye_calibration(robot_poses, rvecs, tvecs)
-    print("Camera Calibration:", camT)
-    np.save('config/camera_calib.npy', camT)
+    camera_calib = {
+    "intrinsics": mtx,
+    "extrinsics": camT
+    }
+    print("Camera Calibration:", camera_calib)
+    np.save('config/camera_calib.npy', camera_calib)

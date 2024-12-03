@@ -154,9 +154,11 @@ class VisionSLAM(object):
         self.point_clouds.append(xyzrgb)
 
 if __name__ == "__main__":
+    
     cam = RealSenseCamera()
-    camIntrinsics = cam.getIntrinsics()
-    camera_pose = np.load('config/camera_calib.npy')
+    camera_calib = np.load('config/camera_calib.npy')
+    extrinsics = camera_calib['extrinsics']
+    intrinsics = camera_calib['intrinsics']
     flexiv_robot = FlexivRobot()
     vision_slam = VisionSLAM()
 
@@ -173,7 +175,7 @@ if __name__ == "__main__":
         robot_pose = flexiv_robot.get_tcp_pose(matrix = True)
         time.sleep(1)
         color, depth = cam.get_data(hole_filling=False)
-        xyzrgb = cam.getXYZRGB(color, depth, camIntrinsics, robot_pose, camera_pose, max_depth=0.5, inpaint=True)
+        xyzrgb = cam.getXYZRGB(color, depth, intrinsics, robot_pose, extrinsics, max_depth=0.5, inpaint=True)
         vision_slam.add_point_cloud(xyzrgb)
 
 

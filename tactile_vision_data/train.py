@@ -17,7 +17,9 @@ def train_gs(dataset_dir="dataset"):
     gaussians.training_setup(gs_params)
     render = Renderer(gaussians)
 
-    camera_pose = np.load('config/camera_calib.npy')
+    camera_calib = np.load('config/camera_calib.npy')  # Extrinsic calibration matrix
+    camera_pose = camera_calib['extrinsics']
+    intrinsics = camera_calib['intrinsics']
 
     # Get the list of all available data files
     data_files = [f.split('_')[1].split('.')[0] for f in os.listdir(dataset_dir) if f.startswith("rgb")]
@@ -41,8 +43,6 @@ def train_gs(dataset_dir="dataset"):
         rgb_path = os.path.join(dataset_dir, f"rgb_{sampled_index}.npy")
         depth_path = os.path.join(dataset_dir, f"depth_{sampled_index}.npy")
         pose_path = os.path.join(dataset_dir, f"pose_{sampled_index}.npy")
-
-        print(depth_path)
         
         rgb = np.load(rgb_path)
         depth = np.load(depth_path)
@@ -51,7 +51,7 @@ def train_gs(dataset_dir="dataset"):
         # Combine robot pose and camera pose to get the extrinsics (world-to-camera transform)
         extrinsics  = torch.tensor(robot_pose @ camera_pose, dtype=torch.float32, device="cuda")
 
-        render_pkg  = render.render(extrinsics , camera_params.image_width, camera_params.image_height)
+        render_pkg  = render.render(intrinsics, extrinsics, camera_params.image_width, camera_params.image_height)
 
         image = render_pkg["render"]
         rendered_depth = render_pkg["render_depth"]
