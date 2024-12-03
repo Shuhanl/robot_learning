@@ -41,6 +41,8 @@ def train_gs(dataset_dir="dataset"):
         rgb_path = os.path.join(dataset_dir, f"rgb_{sampled_index}.npy")
         depth_path = os.path.join(dataset_dir, f"depth_{sampled_index}.npy")
         pose_path = os.path.join(dataset_dir, f"pose_{sampled_index}.npy")
+
+        print(depth_path)
         
         rgb = np.load(rgb_path)
         depth = np.load(depth_path)
