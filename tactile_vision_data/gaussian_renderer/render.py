@@ -1,6 +1,6 @@
 import torch
 import math
-# from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from utils.sh_utils import eval_sh
 
 
@@ -14,13 +14,13 @@ class Renderer:
         """
         self.pc = GaussianModel  # Point cloud Gaussian model
 
-    def compute_camera(intrinsics, extrinsics, image_width, image_height, znear=0.1, zfar=1000.0):
+    def compute_camera(self, intrinsics, extrinsics, image_width, image_height, znear=0.1, zfar=1000.0):
 
         # Compute field of view
-        fx = intrinsics[0, 0]
-        fy = intrinsics[1, 1]
-        cx = intrinsics[0, 2]
-        cy = intrinsics[1, 2]
+        fx = torch.tensor(intrinsics[0, 0], dtype=torch.float32, device="cuda")
+        fy = torch.tensor(intrinsics[1, 1], dtype=torch.float32, device="cuda")
+        cx = torch.tensor(intrinsics[0, 2], dtype=torch.float32, device="cuda")
+        cy = torch.tensor(intrinsics[1, 2], dtype=torch.float32, device="cuda")
         FoVx = 2 * torch.atan(image_width / (2 * fx))
         FoVy = 2 * torch.atan(image_height / (2 * fy))
 

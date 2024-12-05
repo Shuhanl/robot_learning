@@ -156,7 +156,7 @@ class VisionSLAM(object):
 if __name__ == "__main__":
     
     cam = RealSenseCamera()
-    camera_calib = np.load('config/camera_calib.npy')
+    camera_calib = np.load('config/camera_calib.npy', allow_pickle=True).item()
     extrinsics = camera_calib['extrinsics']
     intrinsics = camera_calib['intrinsics']
     flexiv_robot = FlexivRobot()

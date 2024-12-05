@@ -33,3 +33,10 @@ class CameraParams():
         self.image_width = 1280
         self.image_height = 720
         self.cameras_extent = [(-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)]
+
+
+class PipelineParams():
+    def __init__(self):
+        self.convert_SHs_python = False
+        self.compute_cov3D_python = False
+        self.debug = False

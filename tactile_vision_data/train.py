@@ -2,22 +2,25 @@ import torch
 import numpy as np
 import os
 import random
-from gaussian_splatting.render import Renderer
-from gaussian_splatting.gaussian_model import GaussianModel
+from gaussian_renderer.render import Renderer
+from gaussian_renderer.gaussian_model import GaussianModel
 from utils.loss_utils import l1_loss
-from parameters import GSParams, CameraParams
+from parameters import GSParams, CameraParams, PipelineParams
 
 
 def train_gs(dataset_dir="dataset"):
 
     gs_params = GSParams()
-    gaussians = GaussianModel(gs_params.sh_degree, gs_params.distill_feature_dim)
-
     camera_params = CameraParams()
+    gaussians = GaussianModel(gs_params.sh_degree, gs_params.distill_feature_dim)
+    gaussians.create_from_pcd(camera_params.cameras_extent)
+    # scene = Scene(dataset, gaussians)
+
     gaussians.training_setup(gs_params)
     render = Renderer(gaussians)
+    pipe = PipelineParams()
 
-    camera_calib = np.load('config/camera_calib.npy')  # Extrinsic calibration matrix
+    camera_calib = np.load('config/camera_calib.npy', allow_pickle=True).item()
     camera_pose = camera_calib['extrinsics']
     intrinsics = camera_calib['intrinsics']
 
@@ -26,6 +29,8 @@ def train_gs(dataset_dir="dataset"):
     data_indices = sorted(list(set(data_files)))  # Ensure unique and sorted indices
 
     white_background = False
+    bg_color = [1, 1, 1] if white_background else [0, 0, 0]
+    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     for iteration in range(0, gs_params.iterations):
 
@@ -51,7 +56,7 @@ def train_gs(dataset_dir="dataset"):
         # Combine robot pose and camera pose to get the extrinsics (world-to-camera transform)
         extrinsics  = torch.tensor(robot_pose @ camera_pose, dtype=torch.float32, device="cuda")
 
-        render_pkg  = render.render(intrinsics, extrinsics, camera_params.image_width, camera_params.image_height)
+        render_pkg  = render.render(intrinsics, extrinsics, camera_params.image_width, camera_params.image_height, pipe, background)
 
         image = render_pkg["render"]
         rendered_depth = render_pkg["render_depth"]
